@@ -10,11 +10,12 @@ from fabric.contrib.files import upload_template, sed
 from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils.git import clone_or_update
 
+g_openedx_release = 'open-release/ficus.master'
+
 
 def ansible_bootstrap0(*args, **kwargs):
     """ Reimplemented in Fabric:
         github.com/edx/configuration/blob/e2d3ad7f8f3fbcd9047843e03b62b489ef39540e/util/install/ansible-bootstrap.sh """
-    exit(1)
 
     apt_depends('python2.7', 'python2.7-dev', 'python-pip', 'python-apt', 'python-yaml', 'python-jinja2',
                 'build-essential', 'sudo', 'git-core', 'libmysqlclient-dev', 'libffi-dev', 'libssl-dev',
@@ -33,7 +34,7 @@ def ansible_bootstrap0(*args, **kwargs):
     edx_ppa_key_id = 'b41e5e3969464050'
     '''
 
-    openedx_release = kwargs.get('OPENEDX_RELEASE', 'open-release/ficus.1rc3')
+    openedx_release = kwargs.get('OPENEDX_RELEASE', g_openedx_release)
 
     sudo('pip install setuptools=={}'.format(setuptools_version))
     sudo('pip install pip=={}'.format(pip_version))
@@ -50,6 +51,7 @@ def ansible_bootstrap0(*args, **kwargs):
                                           PATH="{}/bin:$PATH".format(virtual_env)):
         run('make requirements')
         with cd('playbooks/edx-east'):
+            run('env')
             run("ansible-playbook edx_ansible.yml -i '127.0.0.1,' -c local -e \"openedx_release='{}'\"".format(
                 openedx_release))
 
@@ -66,7 +68,7 @@ def ansible_sandbox1(*args, **kwargs):
                 'python-pip', 'libmysqlclient-dev', 'python-apt', 'python-dev', 'libxmlsec1-dev', 'libfreetype6-dev',
                 'swig', 'gcc', 'g++')
 
-    openedx_release = kwargs.get('OPENEDX_RELEASE', 'open-release/ficus.1rc3')
+    openedx_release = kwargs.get('OPENEDX_RELEASE', g_openedx_release)
 
     config_vars = ('edx_platform_version',
                    'certs_version',
@@ -94,7 +96,8 @@ def ansible_sandbox1(*args, **kwargs):
 
     # TODO: Run this as a separate offregister task, using new ansible support
     with cd('{wd}/playbooks'.format(wd=wd)), shell_env(**extra_vars_d):
-        sudo('ansible-playbook -c local ./edx_sandbox.yml -i "localhost," {extra_vars}'.format(extra_vars=extra_vars))
+        run('ansible-playbook -c local ./edx_sandbox.yml -i "localhost," {extra_vars}'.format(extra_vars=extra_vars))
+        run('env')
 
     return 'installed: {}'.format(openedx_release)
 
@@ -105,7 +108,7 @@ def step2(*args, **kwargs):
 
 
 def _step3(*args, **kwargs):
-    clone_or_update(team='edx', repo='configuration', branch='open-release/ficus.1rc3', skip_reset=True)
+    clone_or_update(team='edx', repo='configuration', branch=g_openedx_release, skip_reset=True)
     sudo('pip install -r configuration/requirements.txt')
     with cd('configuration/playbooks'):
         sudo('ansible-playbook -c local ./edx_sandbox.yml -i "localhost,"')
