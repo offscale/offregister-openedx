@@ -1,16 +1,21 @@
+import re
+from StringIO import StringIO
+from collections import namedtuple
+from json import load, dumps
 from os import path
+from tempfile import SpooledTemporaryFile, gettempdir
 
-from offutils import gen_random_str
+from offutils import gen_random_str, pp
 from pkg_resources import resource_filename
 
 from fabric.context_managers import cd, shell_env
-from fabric.operations import sudo, run
+from fabric.operations import sudo, run, put, get
 from fabric.contrib.files import upload_template, sed
 
 from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils.git import clone_or_update
 
-g_openedx_release = 'open-release/ficus.master'
+g_openedx_release = 'open-release/ficus.1'
 
 
 def ansible_bootstrap0(*args, **kwargs):
@@ -102,9 +107,44 @@ def ansible_sandbox1(*args, **kwargs):
     return 'installed: {}'.format(openedx_release)
 
 
-def step2(*args, **kwargs):
-    run('echo hello world && ip addr')
+def is_email(s):
+    email = re.compile(r'[^@]+@[^@]+\.[^@]+')
+    return email.match(s) is not None
+
+
+def update_emails_and_regform2(*args, **kwargs):
+    remote_path, lms_config = get_env('lms.env.json')
+    remote_path, cms_config = get_env('cms.env.json')
+    if 'ALL_EMAILS_TO' in kwargs:
+        lms_config = {k: (kwargs['ALL_EMAILS_TO'] if isinstance(v, basestring) and is_email(v) else v)
+                      for k, v in lms_config.iteritems()}
+        cms_config = {k: (kwargs['ALL_EMAILS_TO'] if isinstance(v, basestring) and is_email(v) else v)
+                      for k, v in cms_config.iteritems()}
+        lms_config['CONTACT_MAILING_ADDRESS'] = kwargs['ALL_EMAILS_TO']
+        cms_config['BUGS_EMAIL'] = kwargs['ALL_EMAILS_TO']
+    for env_conf in ('lms.env', 'cms.env'):
+        if env_conf in kwargs:
+            for k, v in kwargs[env_conf].iteritems():
+                if '.' not in k:
+                    (lms_config if env_conf == 'lms.env' else cms_config)[k] = v
+                else:
+                    raise NotImplementedError('nested configuration edits')
+
+    put(local_path=StringIO(dumps(lms_config, indent=4, sort_keys=True)), remote_path=remote_path, use_sudo=True)
+    put(local_path=StringIO(dumps(cms_config, indent=4, sort_keys=True)), remote_path=remote_path, use_sudo=True)
+    sudo('/edx/bin/supervisorctl stop edxapp:')
+    sudo('/edx/bin/supervisorctl stop edxapp_worker:')
+    sudo('/edx/bin/supervisorctl start edxapp:')
+    sudo('/edx/bin/supervisorctl start edxapp_worker:')
     return 'openedx::step2'
+
+
+def get_env(name):
+    remote_path = '/edx/app/edxapp/{}'.format(name)
+    tmpdir = gettempdir()
+    get(local_path=tmpdir, remote_path=remote_path, use_sudo=True)
+    with open(path.join(tmpdir, name)) as f:
+        return namedtuple('_', ('remote_path', 'content'))(remote_path, load(f))
 
 
 def _step3(*args, **kwargs):
