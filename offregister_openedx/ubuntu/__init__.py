@@ -1,14 +1,15 @@
 import re
 from StringIO import StringIO
 from collections import namedtuple
+from functools import partial
 from json import load, dumps
 from os import path
-from tempfile import SpooledTemporaryFile, gettempdir
+from tempfile import gettempdir
 
 from offutils import gen_random_str, pp
 from pkg_resources import resource_filename
 
-from fabric.context_managers import cd, shell_env
+from fabric.context_managers import cd, shell_env, prefix
 from fabric.operations import sudo, run, put, get
 from fabric.contrib.files import upload_template, sed
 
@@ -113,8 +114,8 @@ def is_email(s):
 
 
 def update_emails_and_regform2(*args, **kwargs):
-    remote_path, lms_config = get_env('lms.env.json')
-    remote_path, cms_config = get_env('cms.env.json')
+    lms_path, lms_config = get_env('lms.env.json')
+    cms_path, cms_config = get_env('cms.env.json')
     if 'ALL_EMAILS_TO' in kwargs:
         lms_config = {k: (kwargs['ALL_EMAILS_TO'] if isinstance(v, basestring) and is_email(v) else v)
                       for k, v in lms_config.iteritems()}
@@ -130,13 +131,42 @@ def update_emails_and_regform2(*args, **kwargs):
                 else:
                     raise NotImplementedError('nested configuration edits')
 
-    put(local_path=StringIO(dumps(lms_config, indent=4, sort_keys=True)), remote_path=remote_path, use_sudo=True)
-    put(local_path=StringIO(dumps(cms_config, indent=4, sort_keys=True)), remote_path=remote_path, use_sudo=True)
+    put(local_path=StringIO(dumps(lms_config, indent=4, sort_keys=True)), remote_path=lms_path, use_sudo=True)
+    put(local_path=StringIO(dumps(cms_config, indent=4, sort_keys=True)), remote_path=cms_path, use_sudo=True)
+    if not kwargs.get('NO_OPENEDX_RESTART'):
+        restart_openedx()
+    return 'openedx::step2'
+
+
+def timeout(amount, cmd):
+    return '( cmdpid=$BASHPID; (sleep {amount}; kill $cmdpid) & exec {cmd} )'.format(amount=amount, cmd=cmd)
+
+
+def install_stanford_theme3(*args, **kwargs):
+    theme_dir = '/edx/app/edxapp/edx-platform/themes/edx-stanford-theme'
+    clone_or_update(team='Stanford-Online', repo='edx-theme', branch='master',
+                    to_dir=theme_dir, use_sudo=True)
+    sudo('chown -R edxapp:edxapp \'{}\''.format(theme_dir))
+    lms_path, lms_config = get_env('lms.env.json')
+    lms_config['USE_CUSTOM_THEME'] = True
+    lms_config['THEME_NAME'] = 'stanford-style'
+    put(local_path=StringIO(dumps(lms_config, indent=4, sort_keys=True)), remote_path=lms_path, use_sudo=True)
+
+    edxapp = partial(sudo, user='edxapp', warn_only=True)
+    with cd('/edx/app/edxapp/edx-platform'):
+        with prefix('source /edx/app/edxapp/edxapp_env'):
+            edxapp(timeout('120s', 'paver update_assets cms --settings=aws'))
+            edxapp(timeout('120s', 'paver update_assets lms --settings=aws'))
+    if not kwargs.get('NO_OPENEDX_RESTART'):
+        restart_openedx()
+    return 'installed "{!s}" theme'.format(lms_config['THEME_NAME'])
+
+
+def restart_openedx():
     sudo('/edx/bin/supervisorctl stop edxapp:')
     sudo('/edx/bin/supervisorctl stop edxapp_worker:')
     sudo('/edx/bin/supervisorctl start edxapp:')
     sudo('/edx/bin/supervisorctl start edxapp_worker:')
-    return 'openedx::step2'
 
 
 def get_env(name):
