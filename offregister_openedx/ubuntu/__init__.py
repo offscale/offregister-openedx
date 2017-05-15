@@ -5,18 +5,22 @@ from functools import partial
 from json import load, dumps
 from os import path
 from tempfile import gettempdir
+from time import time
 
+from offregister_fab_utils.fs import append_str
+from offregister_fab_utils.misc import timeout, get_load_remote_file
+from offregister_fab_utils.ubuntu.systemd import restart_systemd
 from offutils import gen_random_str, pp
 from pkg_resources import resource_filename
 
 from fabric.context_managers import cd, shell_env, prefix
 from fabric.operations import sudo, run, put, get
-from fabric.contrib.files import upload_template, sed
+from fabric.contrib.files import upload_template, sed, exists
 
 from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils.git import clone_or_update
 
-g_openedx_release = 'open-release/ficus.1'
+g_openedx_release = 'open-release/ficus.3'
 
 
 def ansible_bootstrap0(*args, **kwargs):
@@ -64,7 +68,7 @@ def ansible_bootstrap0(*args, **kwargs):
     return 'openedx::step0', configuration_dir
 
 
-def ansible_sandbox1(*args, **kwargs):
+def sandbox1(*args, **kwargs):
     """ Reimplemented in Fabric:
         github.com/edx/configuration/blob/98c6fb5dcc5e329c2b7fab5629e141568a081ba5/util/install/sandbox.sh """
 
@@ -89,7 +93,9 @@ def ansible_sandbox1(*args, **kwargs):
                    'ECOMMERCE_WORKER_VERSION',
                    'PROGRAMS_VERSION')
 
-    extra_vars_d = {k: "'{v}'".format(v=kwargs.get(k, openedx_release)) for k in config_vars}
+    extra_vars_d = {k: (lambda v: '{v}'.format(v=v) if v[0] in ("'", '"') else "'{v}'".format(v=v))(
+        kwargs.get(k, openedx_release)
+    ) for k in config_vars}
     extra_vars_d['SANDBOX_ENABLE_ECOMMERCE'] = 'True'
     extra_vars = '-e ' + ' -e '.join('{k}={v}'.format(k=k, v=v) for k, v in extra_vars_d.iteritems())
 
@@ -138,17 +144,60 @@ def update_emails_and_regform2(*args, **kwargs):
     return 'openedx::step2'
 
 
-def timeout(amount, cmd):
-    return '( cmdpid=$BASHPID; (sleep {amount}; kill $cmdpid) & exec {cmd} )'.format(amount=amount, cmd=cmd)
+def nginx_domain_and_https_setup3(*args, **kwargs):
+    g = partial(get_load_remote_file, directory='/edx/app/nginx/sites-available', load_f=lambda fd: fd.read())
+    lms = g(filename='lms')
+    cms = g(filename='cms')
+
+    '''lms_backup = lms
+    lms_backup_remote_path = '{}.{}.bak'.format(lms_backup.remote_path, int(time()))
+    cms_backup = cms
+    cms_backup_remote_path = '{}.{}.bak'.format(cms_backup.remote_path, int(time()))
+    put(local_path=StringIO(cms_backup.content), remote_path=cms_backup_remote_path, use_sudo=True)
+    put(local_path=StringIO(lms_backup.content), remote_path=lms_backup_remote_path, use_sudo=True)'''
+
+    append_str('/etc/hosts', '127.0.0.1\t{site_name}'.format(site_name=kwargs['lms.env']['LMS_BASE']))
+    lms_content = lms.content.replace('server {', 'server {\n' + '    server_name {site_name};'.format(
+        site_name=kwargs['lms.env']['LMS_BASE']
+    )) if 'server_name' not in lms.content else lms.content
+
+    append_str('/etc/hosts', '127.0.0.1\t{site_name}'.format(site_name=kwargs['cms.env']['CMS_BASE']))
+    cms_content = cms.content.replace('server_name ~^((stage|prod)-)?studio.*;',
+                                      'server_name {site_name};'.format(
+                                          site_name=kwargs['cms.env']['CMS_BASE']
+                                      )).replace(' listen 18010 ;', '#listen 18010 ;')
+    put(local_path=StringIO(cms_content), remote_path=cms.remote_path, use_sudo=True)
+    put(local_path=StringIO(lms_content), remote_path=lms.remote_path, use_sudo=True)
+
+    return restart_systemd('nginx')
 
 
-def install_stanford_theme3(*args, **kwargs):
+def _install_stanford_theme3(*args, **kwargs):
     theme_dir = '/edx/app/edxapp/edx-platform/themes/edx-stanford-theme'
     clone_or_update(team='Stanford-Online', repo='edx-theme', branch='master',
                     to_dir=theme_dir, use_sudo=True)
     sudo('chown -R edxapp:edxapp \'{}\''.format(theme_dir))
     lms_path, lms_config = get_env('lms.env.json')
     lms_config['USE_CUSTOM_THEME'] = True
+    lms_config['THEME_NAME'] = 'stanford-style'
+    put(local_path=StringIO(dumps(lms_config, indent=4, sort_keys=True)), remote_path=lms_path, use_sudo=True)
+
+    edxapp = partial(sudo, user='edxapp', warn_only=True)
+    with cd('/edx/app/edxapp/edx-platform'):
+        with prefix('source /edx/app/edxapp/edxapp_env'):
+            edxapp(timeout('120s', 'paver update_assets cms --settings=aws'))
+            edxapp(timeout('120s', 'paver update_assets lms --settings=aws'))
+    if not kwargs.get('NO_OPENEDX_RESTART'):
+        restart_openedx()
+    return 'installed "{!s}" theme'.format(lms_config['THEME_NAME'])
+
+
+def _uninstall_stanford_theme4(*args, **kwargs):
+    theme_dir = '/edx/app/edxapp/edx-platform/themes/edx-stanford-theme'
+    if exists(theme_dir):
+        sudo("rm -rf '{}'".format(theme_dir))
+    lms_path, lms_config = get_env('lms.env.json')
+    lms_config['USE_CUSTOM_THEME'] = False
     lms_config['THEME_NAME'] = 'stanford-style'
     put(local_path=StringIO(dumps(lms_config, indent=4, sort_keys=True)), remote_path=lms_path, use_sudo=True)
 
@@ -169,12 +218,7 @@ def restart_openedx():
     sudo('/edx/bin/supervisorctl start edxapp_worker:')
 
 
-def get_env(name):
-    remote_path = '/edx/app/edxapp/{}'.format(name)
-    tmpdir = gettempdir()
-    get(local_path=tmpdir, remote_path=remote_path, use_sudo=True)
-    with open(path.join(tmpdir, name)) as f:
-        return namedtuple('_', ('remote_path', 'content'))(remote_path, load(f))
+get_env = lambda filename: get_load_remote_file('/edx/app/edxapp', filename, load_f=load)
 
 
 def _step3(*args, **kwargs):
