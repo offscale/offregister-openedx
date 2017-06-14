@@ -1,35 +1,34 @@
 import re
 from StringIO import StringIO
-from collections import namedtuple
 from functools import partial
+from itertools import imap
 from json import load, dumps
 from os import path
-from tempfile import gettempdir
-from time import time
 
-from offregister_fab_utils.fs import append_str
 from offregister_fab_utils.misc import timeout, get_load_remote_file
 from offregister_fab_utils.ubuntu.systemd import restart_systemd
-from offutils import gen_random_str, pp
+from offutils import gen_random_str, pp, it_consumes
 from pkg_resources import resource_filename
 
 from fabric.context_managers import cd, shell_env, prefix
 from fabric.operations import sudo, run, put, get
-from fabric.contrib.files import upload_template, sed, exists
+from fabric.contrib.files import upload_template, sed, exists, append
 
 from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils.git import clone_or_update
 
-g_openedx_release = 'open-release/ficus.3'
+from offregister_openedx.utils import OTemplate
+
+g_openedx_release = 'open-release/ficus.master'
 
 
 def ansible_bootstrap0(*args, **kwargs):
     """ Reimplemented in Fabric:
         github.com/edx/configuration/blob/e2d3ad7f8f3fbcd9047843e03b62b489ef39540e/util/install/ansible-bootstrap.sh """
 
-    apt_depends('python2.7', 'python2.7-dev', 'python-pip', 'python-apt', 'python-yaml', 'python-jinja2',
+    apt_depends('python2.7', 'python2.7-dev', 'python-dev', 'python-pip', 'python-apt', 'python-yaml', 'python-jinja2',
                 'build-essential', 'sudo', 'git-core', 'libmysqlclient-dev', 'libffi-dev', 'libssl-dev',
-                'python-software-properties')
+                'python-software-properties', 'libatlas-dev', 'liblapack-dev')
 
     virtual_env_version = '15.0.2'
     pip_version = '8.1.2'
@@ -119,7 +118,18 @@ def is_email(s):
     return email.match(s) is not None
 
 
-def update_emails_and_regform2(*args, **kwargs):
+def is_domain(s):
+    domain = re.compile(r'^([a-z0-9-]+.)?([a-z0-9-]+).pl$')
+    return domain.match(s) is not None
+
+
+def update_lms_cms_env2(**kwargs):
+    if not kwargs.get('NO_OPENEDX_RESTART'):
+        restart_openedx()
+    return 'openedx::step3'
+
+
+def update_emails_and_regform3(*args, **kwargs):
     lms_path, lms_config = get_env('lms.env.json')
     cms_path, cms_config = get_env('cms.env.json')
     if 'ALL_EMAILS_TO' in kwargs:
@@ -129,6 +139,12 @@ def update_emails_and_regform2(*args, **kwargs):
                       for k, v in cms_config.iteritems()}
         lms_config['CONTACT_MAILING_ADDRESS'] = kwargs['ALL_EMAILS_TO']
         cms_config['BUGS_EMAIL'] = kwargs['ALL_EMAILS_TO']
+    '''if 'treat_local_different' in kwargs and kwargs['treat_local_different']:
+        lms_config = {k: (kwargs['ALL_EMAILS_TO'] if isinstance(v, basestring) and is_email(v) else v)
+                      for k, v in lms_config.iteritems()}
+        cms_config = {k: (kwargs['ALL_EMAILS_TO'] if isinstance(v, basestring) and is_email(v) else v)
+                      for k, v in cms_config.iteritems()}
+        # TODO^'''
     for env_conf in ('lms.env', 'cms.env'):
         if env_conf in kwargs:
             for k, v in kwargs[env_conf].iteritems():
@@ -139,29 +155,78 @@ def update_emails_and_regform2(*args, **kwargs):
 
     put(local_path=StringIO(dumps(lms_config, indent=4, sort_keys=True)), remote_path=lms_path, use_sudo=True)
     put(local_path=StringIO(dumps(cms_config, indent=4, sort_keys=True)), remote_path=cms_path, use_sudo=True)
+
+    run_paver = False
+    if 'openedx_honor_html' in kwargs:
+        with open(resource_filename('offregister_openedx',
+                                    path.join('conf', 'honor.html')), 'rt') as f:
+            honor = f.read().format(openedx_honor_html=kwargs['openedx_honor_html'])
+
+        honor_path = '/edx/var/edxapp/staticfiles/templates/static_templates/honor.html'
+        crc_chk = lambda: sudo("crc32 '{honor_path}'".format(honor_path=honor_path))
+        pre_crc = crc_chk()
+        put(local_path=StringIO(honor), remote_path=honor_path, use_sudo=True)
+
+        if pre_crc != crc_chk():
+            run_paver = True
+            """sudo(
+                'for f in /edx/var/edxapp/staticfiles/templates/static_templates/honor*; do cp \'{honor_path}\' $f; done'.format(
+                    honor_path=honor_path),
+                shell_escape=False)"""
+            it_consumes(imap(lambda dest: sudo('cp {honor_path} {dest}'.format(honor_path=honor_path, dest=dest)),
+                             (d for d in
+                              sudo('ls /edx/var/edxapp/staticfiles/templates/static_templates/honor*').splitlines() + [
+                                  '/edx/app/edxapp/edx-platform/lms/templates/static_templates/honor.html']
+                              if d != honor_path)
+                             ))
+
+    if 'openedx_banner_html' in kwargs:
+        p = '/edx/var/edxapp/staticfiles/templates/index.html'
+
+        def replace(_p):
+            with open(resource_filename('offregister_openedx',
+                                        path.join('conf', 'sed_esc.bash')), 'rt') as f:
+                put(StringIO(
+                    OTemplate(f.read()).substitute(openedx_banner_html=kwargs['openedx_banner_html'], filename=_p)),
+                    remote_path='/tmp/a.bash', mode=0755
+                )
+            return sudo('/tmp/a.bash')
+
+        crc_chk = lambda: sudo("crc32 '{path}'".format(path=p))
+        pre_crc = crc_chk()
+        replace(p)
+        if True or pre_crc != crc_chk():
+            run_paver = True
+            it_consumes(
+                imap(lambda dest: sudo(replace(dest)),
+                     sudo('ls /edx/app/edxapp/edx-platform/lms/templates/index**').splitlines() + [
+                         '/edx/var/edxapp/staticfiles/templates/index.html',
+                         '/edx/app/edxapp/edx-platform/lms/static/templates/index.html'])
+            )
+    # sed('', '"city", "country", "goals",', '"city", "country", "goals", "student_id",', limit=1, use_sudo=True)
+
     if not kwargs.get('NO_OPENEDX_RESTART'):
-        restart_openedx()
-    return 'openedx::step2'
+        restart_openedx(run_paver=run_paver, paver_cms=False, paver_lms=run_paver)
+    return 'openedx::step3'
 
 
-def nginx_domain_and_https_setup3(*args, **kwargs):
+def nginx_domain_and_https_setup4(*args, **kwargs):
+    pp(kwargs)
     g = partial(get_load_remote_file, directory='/edx/app/nginx/sites-available', load_f=lambda fd: fd.read())
     lms = g(filename='lms')
     cms = g(filename='cms')
 
-    '''lms_backup = lms
-    lms_backup_remote_path = '{}.{}.bak'.format(lms_backup.remote_path, int(time()))
-    cms_backup = cms
-    cms_backup_remote_path = '{}.{}.bak'.format(cms_backup.remote_path, int(time()))
-    put(local_path=StringIO(cms_backup.content), remote_path=cms_backup_remote_path, use_sudo=True)
-    put(local_path=StringIO(lms_backup.content), remote_path=lms_backup_remote_path, use_sudo=True)'''
+    sudo('cp "{filename}" "{filename}.$(date +%s%3N).bak"'.format(filename=lms.remote_path))
+    sudo('cp "{filename}" "{filename}.$(date +%s%3N).bak"'.format(filename=cms.remote_path))
 
-    append_str('/etc/hosts', '127.0.0.1\t{site_name}'.format(site_name=kwargs['lms.env']['LMS_BASE']))
+    hosts_append = partial(append, filename='/etc/hosts', use_sudo=True)
+
+    hosts_append(text='127.0.0.1\t{site_name}'.format(site_name=kwargs['lms.env']['LMS_BASE']))
     lms_content = lms.content.replace('server {', 'server {\n' + '    server_name {site_name};'.format(
         site_name=kwargs['lms.env']['LMS_BASE']
     )) if 'server_name' not in lms.content else lms.content
 
-    append_str('/etc/hosts', '127.0.0.1\t{site_name}'.format(site_name=kwargs['cms.env']['CMS_BASE']))
+    hosts_append(text='127.0.0.1\t{site_name}'.format(site_name=kwargs['cms.env']['CMS_BASE']))
     cms_content = cms.content.replace('server_name ~^((stage|prod)-)?studio.*;',
                                       'server_name {site_name};'.format(
                                           site_name=kwargs['cms.env']['CMS_BASE']
@@ -170,6 +235,27 @@ def nginx_domain_and_https_setup3(*args, **kwargs):
     put(local_path=StringIO(lms_content), remote_path=lms.remote_path, use_sudo=True)
 
     return restart_systemd('nginx')
+
+
+def edx_platform_fork5(*args, **kwargs):
+    # TODO: Finish
+    run_paver = True
+
+    to_dir = '/edx/app/edxapp/edx-platform'
+    if exists(to_dir) and not exists(to_dir + '.orig'):
+        sudo('mv {to_dir} {to_dir}.orig'.format(to_dir=to_dir))
+    clone_or_update(team='offscale', repo='edx-platform', branch='open-release/ficus.master',
+                    use_sudo=True, to_dir=to_dir)
+    sudo('chown -R edxapp:edxapp {}'.format(to_dir))
+
+    virtual_env = '/edx/app/edxapp/venvs/edxapp'
+    edxapp = partial(sudo, user='edxapp', warn_only=True)
+    with cd(to_dir), shell_env(VIRTUAL_ENV=virtual_env, PATH="{}/bin:$PATH".format(virtual_env)):
+        edxapp('pip install -q --disable-pip-version-check --exists-action w -r requirements/edx/local.txt')
+
+    # if not kwargs.get('NO_OPENEDX_RESTART'):
+    restart_openedx(run_paver=run_paver, paver_cms=True, paver_lms=run_paver)
+    return 'openedx::step5'
 
 
 def _install_stanford_theme3(*args, **kwargs):
@@ -211,9 +297,23 @@ def _uninstall_stanford_theme4(*args, **kwargs):
     return 'installed "{!s}" theme'.format(lms_config['THEME_NAME'])
 
 
-def restart_openedx():
+def restart_openedx(run_paver=False, paver_cms=True, paver_lms=True, debug_no_paver=False):
     sudo('/edx/bin/supervisorctl stop edxapp:')
     sudo('/edx/bin/supervisorctl stop edxapp_worker:')
+    if run_paver:
+        edxapp = partial(sudo, user='edxapp', warn_only=True)
+        with cd('/edx/app/edxapp/edx-platform'):
+            with prefix('source /edx/app/edxapp/edxapp_env'):
+                if paver_cms:
+                    if debug_no_paver:
+                        edxapp('python manager.py cms --settings=aws collectstatic --noinput')
+                    else:
+                        edxapp(timeout('1200s', 'paver update_assets cms --settings=aws'))
+                if paver_lms:
+                    if debug_no_paver:
+                        edxapp('python manager.py lms --settings=aws collectstatic --noinput')
+                    else:
+                        edxapp(timeout('1200s', 'paver update_assets lms --settings=aws'))
     sudo('/edx/bin/supervisorctl start edxapp:')
     sudo('/edx/bin/supervisorctl start edxapp_worker:')
 
