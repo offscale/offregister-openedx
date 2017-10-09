@@ -1,4 +1,3 @@
-import re
 from StringIO import StringIO
 from functools import partial
 from itertools import imap
@@ -11,15 +10,15 @@ from offutils import gen_random_str, pp, it_consumes
 from pkg_resources import resource_filename
 
 from fabric.context_managers import cd, shell_env, prefix
-from fabric.operations import sudo, run, put, get
+from fabric.operations import sudo, run, put
 from fabric.contrib.files import upload_template, sed, exists, append
 
 from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils.git import clone_or_update
 
-from offregister_openedx.utils import OTemplate
+from offregister_openedx.utils import OTemplate, is_email
 
-g_openedx_release = 'open-release/ficus.master'
+g_openedx_release = 'open-release/ginkgo.master'
 
 
 def ansible_bootstrap0(*args, **kwargs):
@@ -113,23 +112,13 @@ def sandbox1(*args, **kwargs):
     return 'installed: {}'.format(openedx_release)
 
 
-def is_email(s):
-    email = re.compile(r'[^@]+@[^@]+\.[^@]+')
-    return email.match(s) is not None
-
-
-def is_domain(s):
-    domain = re.compile(r'^([a-z0-9-]+.)?([a-z0-9-]+).pl$')
-    return domain.match(s) is not None
-
-
 def update_lms_cms_env2(**kwargs):
     if not kwargs.get('NO_OPENEDX_RESTART'):
         restart_openedx()
     return 'openedx::step3'
 
 
-def update_emails_and_regform3(*args, **kwargs):
+def update_conf3(*args, **kwargs):
     lms_path, lms_config = get_env('lms.env.json')
     cms_path, cms_config = get_env('cms.env.json')
     if 'ALL_EMAILS_TO' in kwargs:
@@ -137,8 +126,11 @@ def update_emails_and_regform3(*args, **kwargs):
                       for k, v in lms_config.iteritems()}
         cms_config = {k: (kwargs['ALL_EMAILS_TO'] if isinstance(v, basestring) and is_email(v) else v)
                       for k, v in cms_config.iteritems()}
-        lms_config['CONTACT_MAILING_ADDRESS'] = kwargs['ALL_EMAILS_TO']
-        cms_config['BUGS_EMAIL'] = kwargs['ALL_EMAILS_TO']
+        for k in ('FEEDBACK_SUBMISSION_EMAIL',
+                  'CONTACT_MAILING_ADDRESS',
+                  'PARTNER_SUPPORT_EMAIL'):
+            lms_config[k] = kwargs['ALL_EMAILS_TO']
+
     '''if 'treat_local_different' in kwargs and kwargs['treat_local_different']:
         lms_config = {k: (kwargs['ALL_EMAILS_TO'] if isinstance(v, basestring) and is_email(v) else v)
                       for k, v in lms_config.iteritems()}
@@ -206,7 +198,7 @@ def update_emails_and_regform3(*args, **kwargs):
     # sed('', '"city", "country", "goals",', '"city", "country", "goals", "student_id",', limit=1, use_sudo=True)
 
     if not kwargs.get('NO_OPENEDX_RESTART'):
-        restart_openedx(run_paver=run_paver, paver_cms=False, paver_lms=run_paver)
+        restart_openedx(run_paver=run_paver, paver_cms=True, paver_lms=run_paver)
     return 'openedx::step3'
 
 
@@ -305,15 +297,15 @@ def restart_openedx(run_paver=False, paver_cms=True, paver_lms=True, debug_no_pa
         with cd('/edx/app/edxapp/edx-platform'):
             with prefix('source /edx/app/edxapp/edxapp_env'):
                 if paver_cms:
-                    if debug_no_paver:
-                        edxapp('python manager.py cms --settings=aws collectstatic --noinput')
-                    else:
-                        edxapp(timeout('1200s', 'paver update_assets cms --settings=aws'))
+                    # if debug_no_paver:
+                    edxapp('python manage.py cms --settings=aws collectstatic --noinput')
+                    # else:
+                    #     edxapp(timeout('5m', 'paver update_assets cms --settings=aws'))
                 if paver_lms:
                     if debug_no_paver:
-                        edxapp('python manager.py lms --settings=aws collectstatic --noinput')
+                        edxapp('python manage.py lms --settings=aws collectstatic --noinput')
                     else:
-                        edxapp(timeout('1200s', 'paver update_assets lms --settings=aws'))
+                        edxapp(timeout('5m', 'paver update_assets lms --settings=aws'))
     sudo('/edx/bin/supervisorctl start edxapp:')
     sudo('/edx/bin/supervisorctl start edxapp_worker:')
 
