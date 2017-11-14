@@ -5,7 +5,7 @@ from json import load, dumps
 from os import path
 
 from offregister_fab_utils.misc import timeout, get_load_remote_file
-from offregister_fab_utils.ubuntu.systemd import restart_systemd
+from offregister_fab_utils.ubuntu.systemd import restart_systemd, install_upgrade_service
 from offutils import gen_random_str, pp, it_consumes
 from pkg_resources import resource_filename
 
@@ -114,7 +114,8 @@ def sandbox1(*args, **kwargs):
 
 def update_lms_cms_env2(**kwargs):
     if not kwargs.get('NO_OPENEDX_RESTART'):
-        restart_openedx()
+        run_paver = True
+        restart_openedx(run_paver=run_paver, paver_cms=True, paver_lms=run_paver)
     return 'openedx::step3'
 
 
@@ -287,6 +288,71 @@ def _uninstall_stanford_theme4(*args, **kwargs):
     if not kwargs.get('NO_OPENEDX_RESTART'):
         restart_openedx()
     return 'installed "{!s}" theme'.format(lms_config['THEME_NAME'])
+
+
+def install_analytics_dashboard6(*args, **kwargs):
+    apt_depends('python-virtualenv')
+
+    edxapp = partial(sudo, user='edxapp', warn_only=True)
+
+    root = '/edx/extra_repos'
+    repo = 'edx-analytics-dashboard'
+    repo_dir = '{root}/{repo}'.format(root=root, repo=repo)
+    venvs_dir = '{root}/venvs'.format(root=root, repo=repo)
+    venv = '{venvs_dir}/{repo}-env'.format(venvs_dir=venvs_dir, repo=repo)
+    home_dir = run('echo $HOME', quiet=True)
+
+    sudo("mkdir -p '{repo_dir}' '{venvs_dir}/.cache'".format(repo_dir=repo_dir, venvs_dir=venvs_dir))
+    sudo("chown -R edxapp:edxapp '{repo_dir}' '{venvs_dir}'".format(repo_dir=repo_dir, venvs_dir=venvs_dir))
+    sudo('setfacl -m g:edxapp:r /var/tmp')
+    with shell_env(NODE_PATH='{home_dir}/n/lib/node_modules'.format(home_dir=home_dir),
+                   PATH="{home_dir}/n/bin:$PATH".format(venv=venv, home_dir=home_dir)):
+        run('npm i -g webpack-dev-server')
+
+    clone_or_update(repo=repo, team='edx', branch='master', to_dir=repo_dir, cmd_runner=edxapp)
+
+    if not exists('$HOME/n'):
+        raise NotImplementedError('TODO: Add `n-install` code from app-push repo')
+    elif not exists(venv):
+        edxapp("virtualenv '{venv}'".format(venv=venv))
+        edxapp("printf '%s\n%s' '[global]' 'cache-dir={venvs_dir}/.cache' > {venv}/pip.conf".format(venvs_dir=venvs_dir,
+                                                                                                    venv=venv))
+
+    with shell_env(VIRTUAL_ENV=venv, PYTHONPATH=venv,
+                   NODE_PATH='{home_dir}/n/lib/node_modules'.format(home_dir=home_dir),
+                   npm_config_cache='{venvs_dir}/.node_cache'.format(venvs_dir=venvs_dir),
+                   PATH="{venv}/bin:{home_dir}/n/bin:$PATH".format(venv=venv, home_dir=home_dir)
+                   ), cd(repo_dir):
+        edxapp('make develop')
+        edxapp('make migrate')
+
+    frontend_service_name = '{repo}-frontend'.format(repo=repo)
+    install_upgrade_service(frontend_service_name,
+                            context={
+                                'WorkingDirectory': repo_dir,
+                                'Environments': 'Environment='
+                                                'NODE_PATH={home_dir}/n/lib/node_modules'
+                                                'Environment='
+                                                'PATH={home_dir}/n/bin'
+                                                ''.format(home_dir=home_dir),
+                                "ExecStart": '{home_dir}/n/bin/npm start'
+                                             ''.format(home_dir=home_dir),
+                                'User': 'edxapp', 'Group': 'edxapp',
+                                'service_name': frontend_service_name
+                            })
+
+    backend_service_name = '{repo}-backend'.format(repo=repo)
+    install_upgrade_service(backend_service_name,
+                            context={
+                                'WorkingDirectory': repo_dir,
+                                'Environments': 'Environment=VIRTUAL_ENV={venv}\n'
+                                                'Environment=PYTHONPATH={venv}'.format(venv=venv),
+                                'ExecStart': '{venv}/bin/python manage.py runserver 0.0.0.0:8110'.format(venv=venv),
+                                'User': 'edxapp', 'Group': 'edxapp',
+                                'service_name': backend_service_name
+                            })
+
+    return restart_systemd(frontend_service_name), restart_systemd(backend_service_name)
 
 
 def restart_openedx(run_paver=False, paver_cms=True, paver_lms=True, debug_no_paver=False):
