@@ -19,6 +19,7 @@ if __name__ == '__main__':
 
     _data_join, _data_install_dir = to_funcs('_data')
     conf_join, conf_install_dir = to_funcs('conf')
+    config_join, config_install_dir = to_funcs('config')
 
     setup(
         name=package_name,
@@ -30,6 +31,7 @@ if __name__ == '__main__':
         install_requires=['fabric'],
         data_files=[
             (_data_install_dir(), map(_data_join, listdir(_data_join()))),
-            (conf_install_dir(), map(conf_join, listdir(conf_join())))
+            (conf_install_dir(), map(conf_join, listdir(conf_join()))),
+            (config_install_dir(), map(config_join, listdir(config_join())))
         ]
     )

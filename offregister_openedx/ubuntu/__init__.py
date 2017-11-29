@@ -115,7 +115,7 @@ def sandbox1(*args, **kwargs):
 def update_lms_cms_env2(**kwargs):
     if not kwargs.get('NO_OPENEDX_RESTART'):
         run_paver = True
-        restart_openedx(run_paver=run_paver, paver_cms=True, paver_lms=run_paver)
+        restart_openedx666(run_paver=run_paver, paver_cms=True, paver_lms=run_paver)
     return 'openedx::step3'
 
 
@@ -199,7 +199,7 @@ def update_conf3(*args, **kwargs):
     # sed('', '"city", "country", "goals",', '"city", "country", "goals", "student_id",', limit=1, use_sudo=True)
 
     if not kwargs.get('NO_OPENEDX_RESTART'):
-        restart_openedx(run_paver=run_paver, paver_cms=True, paver_lms=run_paver)
+        restart_openedx666(run_paver=run_paver, paver_cms=True, paver_lms=run_paver)
     return 'openedx::step3'
 
 
@@ -247,7 +247,7 @@ def edx_platform_fork5(*args, **kwargs):
         edxapp('pip install -q --disable-pip-version-check --exists-action w -r requirements/edx/local.txt')
 
     # if not kwargs.get('NO_OPENEDX_RESTART'):
-    restart_openedx(run_paver=run_paver, paver_cms=True, paver_lms=run_paver)
+    restart_openedx666(run_paver=run_paver, paver_cms=True, paver_lms=run_paver)
     return 'openedx::step5'
 
 
@@ -267,7 +267,7 @@ def _install_stanford_theme3(*args, **kwargs):
             edxapp(timeout('120s', 'paver update_assets cms --settings=aws'))
             edxapp(timeout('120s', 'paver update_assets lms --settings=aws'))
     if not kwargs.get('NO_OPENEDX_RESTART'):
-        restart_openedx()
+        restart_openedx666()
     return 'installed "{!s}" theme'.format(lms_config['THEME_NAME'])
 
 
@@ -286,7 +286,7 @@ def _uninstall_stanford_theme4(*args, **kwargs):
             edxapp(timeout('120s', 'paver update_assets cms --settings=aws'))
             edxapp(timeout('120s', 'paver update_assets lms --settings=aws'))
     if not kwargs.get('NO_OPENEDX_RESTART'):
-        restart_openedx()
+        restart_openedx666()
     return 'installed "{!s}" theme'.format(lms_config['THEME_NAME'])
 
 
@@ -355,7 +355,7 @@ def install_analytics_dashboard6(*args, **kwargs):
     return restart_systemd(frontend_service_name), restart_systemd(backend_service_name)
 
 
-def restart_openedx(run_paver=False, paver_cms=True, paver_lms=True, debug_no_paver=False):
+def restart_openedx666(run_paver=False, paver_cms=True, paver_lms=True, debug_no_paver=False, **kwargs):
     sudo('/edx/bin/supervisorctl stop edxapp:')
     sudo('/edx/bin/supervisorctl stop edxapp_worker:')
     if run_paver:
