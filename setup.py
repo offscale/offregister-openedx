@@ -1,7 +1,8 @@
+from operator import itemgetter
 from setuptools import setup, find_packages
-from os import path, listdir
+from os import path, listdir, walk
 from functools import partial
-from itertools import imap, ifilter
+from itertools import imap, ifilter, groupby
 from ast import parse
 from distutils.sysconfig import get_python_lib
 
@@ -29,9 +30,12 @@ if __name__ == '__main__':
         packages=find_packages(),
         package_dir={package_name: package_name},
         install_requires=['fabric'],
-        data_files=[
-            (_data_install_dir(), map(_data_join, listdir(_data_join()))),
-            (conf_install_dir(), map(conf_join, listdir(conf_join()))),
-            (config_install_dir(), map(config_join, listdir(config_join())))
-        ]
+        data_files=[(_data_install_dir(), map(_data_join, listdir(_data_join()))),
+                    (conf_install_dir(), map(conf_join, listdir(conf_join())))
+                    ] + [(to_dir, map(itemgetter(1), this_dir))
+                         for to_dir, this_dir in groupby(((config_install_dir(path.relpath(root, config_join())),
+                                                           path.join(root, fname))
+                                                          for root, dirs, files in walk(config_join(), topdown=False)
+                                                          for fname in files), itemgetter(0))]
+
     )
