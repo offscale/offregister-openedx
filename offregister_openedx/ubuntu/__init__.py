@@ -4,11 +4,12 @@ from sys import modules
 
 from cStringIO import StringIO
 
+from offregister_fab_utils.fs import cmd_avail
 from offutils import update_d
 from pkg_resources import resource_filename
 from os import path
 
-from fabric.context_managers import cd, shell_env
+from fabric.context_managers import cd, shell_env, settings
 from fabric.contrib.files import append, exists, upload_template
 from fabric.operations import sudo, put
 
@@ -24,7 +25,7 @@ g_context = {
 }
 g_platform_dir = '{root}/edx-platform'.format(root=g_context['EDXROOT'])
 g_user = 'edxapp'
-g_edxapp = partial(sudo, user=g_user, group=g_user, warn_only=True)
+g_edxapp = partial(sudo, user=g_user, group=g_user)
 
 # Get file from config dir of this python package
 g_file = lambda *paths: resource_filename(modules[__name__].__name__.partition('.')[0], path.join('config', *paths))
@@ -43,7 +44,7 @@ def install0(*args, **kwargs):
             debconf-set-selections <<< 'mysql-server mysql-server/root_password password {password}';
             debconf-set-selections <<< 'mysql-server mysql-server/root_password_again password {password}';
             '''.format(password=kwargs['MYSQL_PASSWORD']), quiet=True)
-            apt_depends('mysql-server', 'mysql-client')
+            apt_depends('mysql-server', 'mysql-client', 'libmysqlclient-dev')
             sudo('systemctl unmask mysql')
             restart_systemd('mysql')
 
@@ -67,7 +68,8 @@ def install0(*args, **kwargs):
     # LMS/CMS install prep
     apt_depends('gettext', 'gfortran', 'graphviz', 'graphviz-dev', 'libffi-dev', 'libfreetype6-dev', 'libgeos-dev',
                 'libjpeg8-dev', 'liblapack-dev', 'libpng12-dev', 'libxml2-dev', 'libxmlsec1-dev', 'libxslt1-dev',
-                'nodejs', 'npm', 'ntp', 'pkg-config', 'python-pip', 'python-virtualenv', 'nodeenv')
+                'nodejs', 'npm', 'ntp', 'pkg-config', 'python-pip', 'python-virtualenv', 'nodeenv',
+                'libsqlite3-dev', 'python-pysqlite2', 'python-pysqlite2-dbg')
 
     # Production
     apt_depends('supervisor', 'nginx')
@@ -75,15 +77,16 @@ def install0(*args, **kwargs):
     # LMS/CMS install
     if sudo('id -u {user}'.format(user=g_user), warn_only=True, quiet=True).failed:
         sudo('useradd -UM {user}'.format(user=g_user))
-    sudo('mkdir -p {root} {root}/staticfiles {root}/uploads'.format(root=g_context['EDXROOT']))
+    sudo('mkdir -p {root} {root}/staticfiles {root}/uploads $HOME/.npm $HOME/.config'.format(root=g_context['EDXROOT']))
     sudo('touch {root}/lms.env.json {root}/cms.env.json'.format(root=g_context['EDXROOT']))
-    sudo('chown -R {user}:{user} {root}'.format(user=g_user, root=g_context['EDXROOT']))
+    sudo('chown -R {user}:{user} {root} $HOME/.cache $HOME/.npm $HOME/.config'.format(user=g_user,
+                                                                                      root=g_context['EDXROOT']))
 
     clone_or_update(team='edx', repo='edx-platform', branch=openedx_release, skip_reset=True, skip_checkout=True,
                     cmd_runner=g_edxapp, to_dir=g_platform_dir)
 
     if not exists(g_context['VENV']):
-        g_edxapp('virtualenv {}'.format(g_context['VENV']))
+        g_edxapp('virtualenv --system-site-packages {}'.format(g_context['VENV']))  # pysqlite wasn't building
         cache_dir = '{}/{}'.format(g_context['VENV'], '.cache')
         sudo('mkdir -p {cache_dir}'.format(cache_dir=cache_dir))
         sudo('chown -R {user}:{user} {cache_dir}'.format(user=g_user, cache_dir=cache_dir))
@@ -103,11 +106,13 @@ def install0(*args, **kwargs):
             g_edxapp('{pipi} paver'.format(pipi=pipi))
             g_edxapp('nodeenv -p')  # Install node environment in same virtualenv
             g_edxapp('paver install_prereqs')
-
+    if not cmd_avail('rtlcss'):
+        sudo('npm i -g rtlcss')
     g_edxapp('mkdir -p {platform_dir}/lms/envs {platform_dir}/cms/envs'.format(platform_dir=g_platform_dir))
 
 
-def configure1(staff_user, staff_email, staff_pass, settings='production', https=False, *args, **kwargs):
+def configure1(staff_user, staff_email, staff_pass, deployment='production', https=False, db_migration=True,
+               *args, **kwargs):
     mysql_password = '{}'.format(kwargs['MYSQL_PASSWORD'])
 
     # Configure database
@@ -157,26 +162,52 @@ def configure1(staff_user, staff_email, staff_pass, settings='production', https
         }
     }
 
+    for system in ('CMS', 'LMS'):
+        k = kwargs['{system}_SITE_NAME'.format(system=system)]
+        if k not in ('127.0.0.1', 'localhost'):
+            append('/etc/hosts', '127.0.0.1\t{k}'.format(k=k), use_sudo=True)
+
     get_nginx_conf = lambda system: update_d(dict(
         (lambda key: (key, kwargs[key]))('_'.join((system.upper(), k)))
         for k in ('LISTEN', 'SITE_NAME', 'EXTRA_BLOCK')
     ), EDXROOT=g_context['EDXROOT'])
 
-    deploy(system='cms', settings=settings, auth_config=auth,
+    deploy(system='cms', deployment=deployment, auth_config=auth,
            env_config=update_d({'SITE_NAME': kwargs['CMS_SITE_NAME']}, env),
            nginx_config=get_nginx_conf('cms'))
-    deploy(system='lms', settings=settings, auth_config=auth,
+    deploy(system='lms', deployment=deployment, auth_config=auth,
            env_config=update_d({'SITE_NAME': kwargs['LMS_SITE_NAME']}, env),
            nginx_config=get_nginx_conf('lms'))
 
+    if not db_migration:
+        return restart_systemd('nginx')
+
     # Configure database users
     with cd(g_platform_dir), shell_env(PATH='{}/bin:$PATH'.format(g_context['VENV']), VIRTUAL_ENV=g_context['VENV']):
-        cmd = './manage.py lms --settings={settings}'.format(settings=settings)
-        g_edxapp('{cmd} manage_user --superuser --staff {staff_user} {staff_email}'.format(cmd=cmd,
-                                                                                           staff_user=staff_user,
-                                                                                           staff_email=staff_email))
-        sudo("{cmd} changepassword '{staff_pass}'".format(cmd=cmd, staff_pass=staff_pass),
-             user=g_user, group=g_user, shell_escape=False)
+        lms_cmd = './manage.py lms --settings={deployment}'.format(deployment=deployment)
+        cms_cmd = './manage.py cms --settings={deployment}'.format(deployment=deployment)
+
+        g_edxapp('{lms_cmd} migrate'.format(lms_cmd=lms_cmd))
+        g_edxapp('{cms_cmd} migrate'.format(cms_cmd=cms_cmd))
+
+        g_edxapp('{lms_cmd} manage_user --superuser --staff {staff_user} {staff_email}'.format(lms_cmd=lms_cmd,
+                                                                                               staff_user=staff_user,
+                                                                                               staff_email=staff_email))
+        with settings(prompts={'Password: ': staff_pass, 'Password (again): ': staff_pass}):
+            g_edxapp("{lms_cmd} changepassword '{staff_user}'".format(lms_cmd=lms_cmd,
+                                                                      staff_user=staff_user))
+
+    return restart_systemd('nginx')
+
+
+def restart_services3(*args, **kwargs):
+    if kwargs.get('skip_storage_services'):
+        for service in ('memcached', 'mysql', 'rabbitmq-server', 'elasticsearch'):
+            if not kwargs.get('no_{service}'.format(service=service)):
+                restart_systemd(service)
+
+    regen('lms', paver=False)
+    regen('cms', paver=False)
 
     return restart_systemd('nginx')
 
@@ -185,10 +216,11 @@ def configure1(staff_user, staff_email, staff_pass, settings='production', https
 # Utility functions #
 #####################
 
-def regen(system, paver=True, supervisor=True, settings='production'):
+def regen(system, paver=True, supervisor=True, deployment='production'):
     with cd(g_platform_dir), shell_env(PATH='{}/bin:$PATH'.format(g_context['VENV']), VIRTUAL_ENV=g_context['VENV']):
         if paver:
-            g_edxapp('paver update_assets {system} --settings={settings}'.format(system=system, settings=settings))
+            g_edxapp('paver update_assets {system} --settings={deployment}'.format(system=system,
+                                                                                   deployment=deployment))
         if supervisor:
             sudo('supervisorctl restart {system}:'.format(system=system))
 
@@ -200,7 +232,7 @@ def update_and_put(d, merge_d, put_location, use_sudo=False):
     return put(sio, put_location, use_sudo=use_sudo)
 
 
-def deploy(system, settings, auth_config, env_config, nginx_config):
+def deploy(system, deployment, auth_config, env_config, nginx_config):
     with open(g_file(system, '{system}.auth.json'.format(system=system))) as f:
         auth = load(f)
 
@@ -213,15 +245,23 @@ def deploy(system, settings, auth_config, env_config, nginx_config):
     update_and_put(env, env_config, '{root}/{system}.env.json'.format(root=g_context['EDXROOT'], system=system),
                    use_sudo=True)
 
-    upload_template(g_file(system, '{settings}.py'.format(settings=settings)),
-                    '{platform_dir}/{system}/envs/{settings}.py'.format(platform_dir=g_platform_dir, system=system,
-                                                                        settings=settings),
+    upload_template(g_file(system, '{deployment}.py'.format(deployment=deployment)),
+                    '{platform_dir}/{system}/envs/{deployment}.py'.format(platform_dir=g_platform_dir, system=system,
+                                                                          deployment=deployment),
                     use_sudo=True, context=g_context)
 
     sudo('chown -R {user}:{user} {root} {platform_dir}'.format(user=g_user, root=g_context['EDXROOT'],
                                                                platform_dir=g_platform_dir))
 
-    if settings == 'production':
+    if deployment == 'production':
+        sudo('rm /etc/nginx/sites-enabled/{system}.conf*'.format(system=system))
         upload_template(g_file('nginx', 'sites-enabled', '{system}.conf'.format(system=system)),
                         '/etc/nginx/sites-enabled/{system}.conf'.format(system=system),
-                        context=nginx_config, use_sudo=True)
+                        context=nginx_config, use_sudo=True, backup=False)
+        for _system in (system, 'workers'):
+            sio = StringIO()
+            with open(g_file('supervisor', 'conf.d', '{system}.conf'.format(system=_system))) as f:
+                s = f.read()
+            sio.write(s.format(**g_context))
+            put(sio, '/etc/supervisor/conf.d/{system}.conf'.format(system=_system), use_sudo=True)
+        sudo('supervisorctl update')
