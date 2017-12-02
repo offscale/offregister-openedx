@@ -4,7 +4,7 @@ from sys import modules
 
 from cStringIO import StringIO
 
-from offutils import update_d, gen_random_str
+from offutils import update_d
 from pkg_resources import resource_filename
 from os import path
 
@@ -12,7 +12,7 @@ from fabric.context_managers import cd, shell_env
 from fabric.contrib.files import append, exists, upload_template
 from fabric.operations import sudo, put
 
-from offregister_fab_utils.apt import apt_depends, is_installed
+from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils.git import clone_or_update
 from offregister_fab_utils.ubuntu.systemd import restart_systemd
 
@@ -27,72 +27,104 @@ g_user = 'edxapp'
 g_edxapp = partial(sudo, user=g_user, group=g_user, warn_only=True)
 
 # Get file from config dir of this python package
-g_file = lambda *paths: resource_filename(modules[__name__].__name__, path.join('config', *paths))
+g_file = lambda *paths: resource_filename(modules[__name__].__name__.partition('.')[0], path.join('config', *paths))
 
 
 def install0(*args, **kwargs):
     openedx_release = kwargs.get('OPENEDX_RELEASE', g_openedx_release)
 
     # Services
-    apt_depends('memcached', 'mysql-server', 'mysql-client', 'rabbitmq-server', 'mongodb-server', 'openjdk-8-jdk')
-    sudo('wget -O - http://packages.elasticsearch.org/GPG-KEY-elasticsearch | apt-key add -')
+    apt_depends('openjdk-8-jdk', 'memcached', 'rabbitmq-server')
 
-    # Elasticsearch (optional)
-    append('/etc/apt/sources.list.d/elasticsearch.list',
-           'deb http://packages.elasticsearch.org/elasticsearch/0.90/debian stable main',
-           use_sudo=True)
-    sudo('apt update')
-    if not is_installed('elasticsearch'):
+    if sudo('dpkg -s mysql-server', quiet=True, warn_only=True).failed:
+        with shell_env(DEBIAN_FRONTEND='noninteractive'):
+            # TODO: Better password handling; I think this can get leaked, even with `quiet=True`?
+            sudo('''
+            debconf-set-selections <<< 'mysql-server mysql-server/root_password password {password}';
+            debconf-set-selections <<< 'mysql-server mysql-server/root_password_again password {password}';
+            '''.format(password=kwargs['MYSQL_PASSWORD']), quiet=True)
+            apt_depends('mysql-server', 'mysql-client')
+            sudo('systemctl unmask mysql')
+            restart_systemd('mysql')
+
+    if sudo('dpkg -s mongodb-org', quiet=True, warn_only=True).failed:
+        sudo('apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv 0C49F3730359A14518585931BC711F9BA15703C6')
+        sudo('echo "deb [ arch=amd64,arm64 ] http://repo.mongodb.org/apt/ubuntu xenial/mongodb-org/3.4 multiverse"'
+             ' | sudo tee /etc/apt/sources.list.d/mongodb-org-3.4.list')
+        apt_depends('mongodb-org')
+
+    if sudo('dpkg -s elasticsearch', quiet=True, warn_only=True).failed:
+        sudo('wget -O - http://packages.elasticsearch.org/GPG-KEY-elasticsearch | apt-key add -')
+
+        # Elasticsearch (optional)
+        append('/etc/apt/sources.list.d/elasticsearch.list',
+               'deb http://packages.elasticsearch.org/elasticsearch/0.90/debian stable main',
+               use_sudo=True)
+        sudo('apt update')
         sudo('apt-get install -y elasticsearch=0.90.13')
+        sudo('apt-mark hold elasticsearch')
 
     # LMS/CMS install prep
     apt_depends('gettext', 'gfortran', 'graphviz', 'graphviz-dev', 'libffi-dev', 'libfreetype6-dev', 'libgeos-dev',
                 'libjpeg8-dev', 'liblapack-dev', 'libpng12-dev', 'libxml2-dev', 'libxmlsec1-dev', 'libxslt1-dev',
-                'nodejs', 'npm', 'ntp', 'pkg-config')
+                'nodejs', 'npm', 'ntp', 'pkg-config', 'python-pip', 'python-virtualenv', 'nodeenv')
 
     # Production
     apt_depends('supervisor', 'nginx')
 
     # LMS/CMS install
     if sudo('id -u {user}'.format(user=g_user), warn_only=True, quiet=True).failed:
-        sudo('addgroup {user}'.format(user=g_user))
-        sudo('adduser {user} {user}'.format(user=g_user))
+        sudo('useradd -UM {user}'.format(user=g_user))
     sudo('mkdir -p {root} {root}/staticfiles {root}/uploads'.format(root=g_context['EDXROOT']))
+    sudo('touch {root}/lms.env.json {root}/cms.env.json'.format(root=g_context['EDXROOT']))
     sudo('chown -R {user}:{user} {root}'.format(user=g_user, root=g_context['EDXROOT']))
 
-    clone_or_update(team='edx', repo='edx-platform', branch=openedx_release, skip_reset=True, cmd_runner=g_edxapp,
-                    to_dir=g_platform_dir)
+    clone_or_update(team='edx', repo='edx-platform', branch=openedx_release, skip_reset=True, skip_checkout=True,
+                    cmd_runner=g_edxapp, to_dir=g_platform_dir)
 
     if not exists(g_context['VENV']):
         g_edxapp('virtualenv {}'.format(g_context['VENV']))
-    with cd(g_platform_dir), shell_env(PATH='{}/bin:$PATH'.format(g_context['VENV']), VIRTUAL_ENV=g_context['VENV']):
-        g_edxapp('pip install pip==8.1.2')
-        g_edxapp('pip install setuptools==24.0.3')
-        g_edxapp('pip install -r requirements/edx/pre.txt')
-        g_edxapp('pip install -r requirements/edx/github.txt')  # go grab a coffee, this is going to take some time
-        g_edxapp('pip install -r requirements/edx/local.txt')
-        g_edxapp('pip install -r requirements/edx/base.txt')
-        g_edxapp('pip install -r requirements/edx/post.txt')
-        g_edxapp('pip install -r requirements/edx/paver.txt')
-        g_edxapp('nodeenv -p')  # Install node environment in same virtualenv
-        g_edxapp('paver install_prereqs')
+        cache_dir = '{}/{}'.format(g_context['VENV'], '.cache')
+        sudo('mkdir -p {cache_dir}'.format(cache_dir=cache_dir))
+        sudo('chown -R {user}:{user} {cache_dir}'.format(user=g_user, cache_dir=cache_dir))
+
+        with cd(g_platform_dir), shell_env(PATH='{}/bin:$PATH'.format(g_context['VENV']),
+                                           VIRTUAL_ENV=g_context['VENV'],
+                                           PIP_DOWNLOAD_CACHE=cache_dir):
+            pipi = 'pip install --no-cache-dir'
+            g_edxapp('{pipi} pip==8.1.2'.format(pipi=pipi))
+            g_edxapp('{pipi} setuptools==24.0.3'.format(pipi=pipi))
+            g_edxapp('{pipi} -r requirements/edx/pre.txt'.format(pipi=pipi))
+            g_edxapp('{pipi} -r requirements/edx/github.txt'.format(pipi=pipi))  # coffee time
+            g_edxapp('{pipi} -r requirements/edx/local.txt'.format(pipi=pipi))
+            g_edxapp('{pipi} -r requirements/edx/base.txt'.format(pipi=pipi))
+            g_edxapp('{pipi} -r requirements/edx/post.txt'.format(pipi=pipi))
+            g_edxapp('{pipi} -r requirements/edx/paver.txt'.format(pipi=pipi))
+            g_edxapp('{pipi} paver'.format(pipi=pipi))
+            g_edxapp('nodeenv -p')  # Install node environment in same virtualenv
+            g_edxapp('paver install_prereqs')
+
+    g_edxapp('mkdir -p {platform_dir}/lms/envs {platform_dir}/cms/envs'.format(platform_dir=g_platform_dir))
 
 
 def configure1(staff_user, staff_email, staff_pass, settings='production', https=False, *args, **kwargs):
-    mysql_password = gen_random_str(32)
+    mysql_password = '{}'.format(kwargs['MYSQL_PASSWORD'])
 
     # Configure database
-    sql = "SELECT EXISTS(SELECT 1 FROM mysql.user WHERE user = 'root');".format(user=g_user)
-    existent = sudo("mysql -u'{user}' -p'{password}' -Bse '{sql}'".format(user=g_user,
-                                                                          password=mysql_password,
-                                                                          sql=sql),
+    existent = sudo("mysql -h localhost -u'{user}' -p'{password}' -Bse 'use {user}'".format(user=g_user,
+                                                                                            password=mysql_password),
                     warn_only=True, quiet=True)
-    if existent.failed or existent == '0':
-        sudo('''mysql -u root -p  << END
-                    CREATE DATABASE {user};
-                    CREATE USER '{user}'@'localhost' IDENTIFIED BY '{password}';
-                    GRANT ALL ON {user}.* TO '{user}'@'localhost';
-                END'''.format(user=g_user, password=mysql_password))
+    if existent.failed:
+        ftmp = g_edxapp('mktemp --suffix .sql')
+        sio = StringIO()
+        sio.write('''CREATE DATABASE {user};
+                     CREATE USER '{user}'@'localhost' IDENTIFIED BY '{password}';
+                     GRANT ALL ON {user}.* TO '{user}'@'localhost';'''.format(user=g_user, password=mysql_password))
+        put(sio, ftmp, use_sudo=True)
+        sudo("mysql -h localhost -u root -p'{password}' < {ftmp}".format(password=mysql_password, ftmp=ftmp),
+             shell_escape=False,  # quiet=True
+             )
+        sudo('rm {ftmp}'.format(ftmp=ftmp))
 
     # Configuration files
     env = {
@@ -124,10 +156,18 @@ def configure1(staff_user, staff_email, staff_pass, settings='production', https
             }
         }
     }
+
+    get_nginx_conf = lambda system: update_d(dict(
+        (lambda key: (key, kwargs[key]))('_'.join((system.upper(), k)))
+        for k in ('LISTEN', 'SITE_NAME', 'EXTRA_BLOCK')
+    ), EDXROOT=g_context['EDXROOT'])
+
     deploy(system='cms', settings=settings, auth_config=auth,
-           env_config=update_d(env.copy(), SITE_NAME=kwargs['CMS_SITE_NAME']))
+           env_config=update_d({'SITE_NAME': kwargs['CMS_SITE_NAME']}, env),
+           nginx_config=get_nginx_conf('cms'))
     deploy(system='lms', settings=settings, auth_config=auth,
-           env_config=update_d(env, SITE_NAME=kwargs['LMS_SITE_NAME']))
+           env_config=update_d({'SITE_NAME': kwargs['LMS_SITE_NAME']}, env),
+           nginx_config=get_nginx_conf('lms'))
 
     # Configure database users
     with cd(g_platform_dir), shell_env(PATH='{}/bin:$PATH'.format(g_context['VENV']), VIRTUAL_ENV=g_context['VENV']):
@@ -160,9 +200,11 @@ def update_and_put(d, merge_d, put_location, use_sudo=False):
     return put(sio, put_location, use_sudo=use_sudo)
 
 
-def deploy(system, settings, auth_config, env_config):
+def deploy(system, settings, auth_config, env_config, nginx_config):
     with open(g_file(system, '{system}.auth.json'.format(system=system))) as f:
         auth = load(f)
+
+    g_edxapp('mkdir -p {root}'.format(root=g_context['EDXROOT']))
     update_and_put(auth, auth_config, '{root}/{system}.auth.json'.format(root=g_context['EDXROOT'], system=system),
                    use_sudo=True)
 
@@ -174,8 +216,12 @@ def deploy(system, settings, auth_config, env_config):
     upload_template(g_file(system, '{settings}.py'.format(settings=settings)),
                     '{platform_dir}/{system}/envs/{settings}.py'.format(platform_dir=g_platform_dir, system=system,
                                                                         settings=settings),
-                    use_sudo=False, context=g_context)
+                    use_sudo=True, context=g_context)
+
+    sudo('chown -R {user}:{user} {root} {platform_dir}'.format(user=g_user, root=g_context['EDXROOT'],
+                                                               platform_dir=g_platform_dir))
 
     if settings == 'production':
-        upload_template(g_file(system, 'nginx', 'sites-enabled', '{system}.conf'.format(system=system)),
-                        '/etc/nginx/sites-enabled/{system}.conf'.format(system=system), context=g_context)
+        upload_template(g_file('nginx', 'sites-enabled', '{system}.conf'.format(system=system)),
+                        '/etc/nginx/sites-enabled/{system}.conf'.format(system=system),
+                        context=nginx_config, use_sudo=True)
