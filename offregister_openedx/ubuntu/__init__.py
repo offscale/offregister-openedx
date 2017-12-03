@@ -179,8 +179,11 @@ def configure1(staff_user, staff_email, staff_pass, deployment='production', htt
            env_config=update_d({'SITE_NAME': kwargs['LMS_SITE_NAME']}, env),
            nginx_config=get_nginx_conf('lms'))
 
-    if not db_migration:
+    def fin():
         return restart_systemd('nginx')
+
+    if not db_migration:
+        return fin()
 
     # Configure database users
     with cd(g_platform_dir), shell_env(PATH='{}/bin:$PATH'.format(g_context['VENV']), VIRTUAL_ENV=g_context['VENV']):
@@ -197,17 +200,17 @@ def configure1(staff_user, staff_email, staff_pass, deployment='production', htt
             g_edxapp("{lms_cmd} changepassword '{staff_user}'".format(lms_cmd=lms_cmd,
                                                                       staff_user=staff_user))
 
-    return restart_systemd('nginx')
+    return fin()
 
 
 def restart_services3(*args, **kwargs):
-    if kwargs.get('skip_storage_services'):
-        for service in ('memcached', 'mysql', 'rabbitmq-server', 'elasticsearch'):
-            if not kwargs.get('no_{service}'.format(service=service)):
+    if kwargs.get('reboot_storage_services'):
+        for service in ('memcached', 'mysql', 'mongod', 'rabbitmq-server', 'elasticsearch'):
+            if not kwargs.get('reboot_{service}'.format(service=service)):
                 restart_systemd(service)
 
-    regen('lms', paver=False)
-    regen('cms', paver=False)
+    regen('lms', paver=kwargs.get('lms_paver', True))
+    regen('cms', paver=kwargs.get('cms_paver', True))
 
     return restart_systemd('nginx')
 
