@@ -82,8 +82,18 @@ def install0(*args, **kwargs):
     sudo('chown -R {user}:{user} {root} $HOME/.cache $HOME/.npm $HOME/.config'.format(user=g_user,
                                                                                       root=g_context['EDXROOT']))
 
-    clone_or_update(team='edx', repo='edx-platform', branch=openedx_release, skip_reset=True, skip_checkout=True,
+    if kwargs.get('destroy_edx_platform', False):
+        g_edxapp('rm -rf {}'.format(g_platform_dir))
+
+    clone_or_update(team=kwargs.get('git_team', 'edx'),
+                    repo=kwargs.get('git_project', 'edx-platform'),
+                    branch=kwargs.get('git_branch', openedx_release),
+                    skip_reset=kwargs.get('git_skip_reset', True),
+                    skip_checkout=kwargs.get('git_skip_checkout', True),
                     cmd_runner=g_edxapp, to_dir=g_platform_dir)
+
+    if kwargs.get('destroy_virtualenv', False):
+        g_edxapp('rm -r {}'.format(g_context['VENV']))
 
     if not exists(g_context['VENV']):
         g_edxapp('virtualenv --system-site-packages {}'.format(g_context['VENV']))  # pysqlite wasn't building
@@ -94,16 +104,8 @@ def install0(*args, **kwargs):
         with cd(g_platform_dir), shell_env(PATH='{}/bin:$PATH'.format(g_context['VENV']),
                                            VIRTUAL_ENV=g_context['VENV'],
                                            PIP_DOWNLOAD_CACHE=cache_dir):
-            pipi = 'pip install --no-cache-dir'
-            g_edxapp('{pipi} pip==8.1.2'.format(pipi=pipi))
-            g_edxapp('{pipi} setuptools==24.0.3'.format(pipi=pipi))
-            g_edxapp('{pipi} -r requirements/edx/pre.txt'.format(pipi=pipi))
-            g_edxapp('{pipi} -r requirements/edx/github.txt'.format(pipi=pipi))  # coffee time
-            g_edxapp('{pipi} -r requirements/edx/local.txt'.format(pipi=pipi))
-            g_edxapp('{pipi} -r requirements/edx/base.txt'.format(pipi=pipi))
-            g_edxapp('{pipi} -r requirements/edx/post.txt'.format(pipi=pipi))
-            g_edxapp('{pipi} -r requirements/edx/paver.txt'.format(pipi=pipi))
-            g_edxapp('{pipi} paver'.format(pipi=pipi))
+            for f in ('pre', 'github', 'local', 'base', 'paver', 'post'):
+                g_edxapp('pip install --no-cache-dir -r requirements/edx/{f}.txt'.format(f=f))
             g_edxapp('nodeenv -p')  # Install node environment in same virtualenv
             g_edxapp('paver install_prereqs')
     if not cmd_avail('rtlcss'):
