@@ -68,7 +68,7 @@ def install0(*args, **kwargs):
     # LMS/CMS install prep
     apt_depends('gettext', 'gfortran', 'graphviz', 'graphviz-dev', 'libffi-dev', 'libfreetype6-dev', 'libgeos-dev',
                 'libjpeg8-dev', 'liblapack-dev', 'libpng12-dev', 'libxml2-dev', 'libxmlsec1-dev', 'libxslt1-dev',
-                'nodejs', 'npm', 'ntp', 'pkg-config', 'python-pip', 'python-virtualenv', 'nodeenv',
+                'nodejs', 'npm', 'ntp', 'pkg-config', 'python-pip', 'virtualenv',
                 'libsqlite3-dev', 'python-pysqlite2', 'python-pysqlite2-dbg')
 
     # Production
@@ -93,7 +93,7 @@ def install0(*args, **kwargs):
                     cmd_runner=g_edxapp, to_dir=g_platform_dir)
 
     if kwargs.get('destroy_virtualenv', False):
-        g_edxapp('rm -r {}'.format(g_context['VENV']))
+        g_edxapp('rm -rf {}'.format(g_context['VENV']))
 
     if not exists(g_context['VENV']):
         g_edxapp('virtualenv --system-site-packages {}'.format(g_context['VENV']))  # pysqlite wasn't building
