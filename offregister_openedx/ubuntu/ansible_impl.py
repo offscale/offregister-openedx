@@ -149,7 +149,7 @@ def update_conf3(*args, **kwargs):
     put(local_path=StringIO(dumps(lms_config, indent=4, sort_keys=True)), remote_path=lms_path, use_sudo=True)
     put(local_path=StringIO(dumps(cms_config, indent=4, sort_keys=True)), remote_path=cms_path, use_sudo=True)
 
-    run_paver = False
+    run_paver = kwargs.get('run_paver', False)
     if 'openedx_honor_html' in kwargs:
         with open(resource_filename('offregister_openedx',
                                     path.join('conf', 'honor.html')), 'rt') as f:
