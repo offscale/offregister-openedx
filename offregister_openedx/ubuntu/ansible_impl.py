@@ -1,37 +1,45 @@
 from StringIO import StringIO
+from copy import deepcopy
 from functools import partial
 from itertools import imap
 from json import load, dumps
 from os import path
 
+from fabric.context_managers import cd, shell_env, prefix
+from fabric.contrib.files import upload_template, sed, exists, append
+from fabric.operations import sudo, run, put
+from fabric.state import env
+from offregister_fab_utils.apt import apt_depends
+from offregister_fab_utils.git import clone_or_update
 from offregister_fab_utils.misc import timeout, get_load_remote_file
 from offregister_fab_utils.ubuntu.systemd import restart_systemd, install_upgrade_service
 from offutils import gen_random_str, pp, it_consumes
 from pkg_resources import resource_filename
 
-from fabric.context_managers import cd, shell_env, prefix
-from fabric.operations import sudo, run, put
-from fabric.contrib.files import upload_template, sed, exists, append
-
-from offregister_fab_utils.apt import apt_depends
-from offregister_fab_utils.git import clone_or_update
-
 from offregister_openedx.utils import OTemplate, is_email
 
-g_openedx_release = 'open-release/ginkgo.master'
+g_openedx_release = 'open-release/ironwood.2'
 
 
 def ansible_bootstrap0(*args, **kwargs):
     """ Reimplemented in Fabric:
-        github.com/edx/configuration/blob/e2d3ad7f8f3fbcd9047843e03b62b489ef39540e/util/install/ansible-bootstrap.sh """
+        https://github.com/edx/configuration/blob/c47d85a/util/install/ansible-bootstrap.sh """
 
-    apt_depends('python2.7', 'python2.7-dev', 'python-dev', 'python-pip', 'python-apt', 'python-yaml', 'python-jinja2',
-                'build-essential', 'sudo', 'git-core', 'libmysqlclient-dev', 'libffi-dev', 'libssl-dev',
-                'python-software-properties', 'libatlas-dev', 'liblapack-dev')
+    sudo('add-apt-repository -y universe')
+    sudo('add-apt-repository -y main')
+    sudo('add-apt-repository -y ppa:ubuntu-toolchain-r/test')
 
-    virtual_env_version = '15.0.2'
-    pip_version = '8.1.2'
-    setuptools_version = '24.0.3'
+    apt_depends(
+        'python2.7', 'python2.7-dev', 'python-pip',
+        'python-apt', 'python-yaml', 'python-jinja2',
+        'build-essential', 'git-core', 'libmysqlclient-dev',
+        'libffi-dev', 'libssl-dev', 'libatlas-base-dev',
+        'liblapack-dev', 'libblas-dev'
+    )
+
+    virtual_env_version = '16.6.0'
+    pip_version = '19.3.1'
+    setuptools_version = '39.0.1'
     virtual_env = '/tmp/bootstrap'
     configuration_dir = '/tmp/configuration'
     ''' # These don't seem to be used:
@@ -42,11 +50,27 @@ def ansible_bootstrap0(*args, **kwargs):
     edx_ppa_key_id = 'b41e5e3969464050'
     '''
 
+    sudo('apt-key adv --keyserver "keyserver.ubuntu.com" --recv-keys "B41E5E3969464050"')
+    sudo('add-apt-repository -y ppa:git-core/ppa')
+
+    dist = run('lsb_release -cs')
+    append('/etc/apt/sources.list.d/openedx.list',
+           'deb http://ppa.edx.org {dist} main'.format(dist=dist),
+           use_sudo=True)
+    sudo('apt-get update -q')
+    apt_depends('gnupg', 'software-properties-common', 'python-software-properties',
+                'python2.7', 'python2.7-dev', 'python-pip',
+                'python-apt', 'python-jinja2', 'build-essential',
+                'sudo', 'git-core', 'libmysqlclient-dev',
+                'libffi-dev', 'libssl-dev'
+                )
+
     openedx_release = kwargs.get('OPENEDX_RELEASE', g_openedx_release)
 
+    sudo('pip install --upgrade pip=={}'.format(pip_version))
     sudo('pip install setuptools=={}'.format(setuptools_version))
-    sudo('pip install pip=={}'.format(pip_version))
     sudo('pip install virtualenv=={}'.format(virtual_env_version))
+
     if not path.isdir(virtual_env):
         run('virtualenv \'{}\''.format(virtual_env))
     clone_or_update(team='edx', repo='configuration',
@@ -60,40 +84,49 @@ def ansible_bootstrap0(*args, **kwargs):
         run('make requirements')
         with cd('playbooks/edx-east'):
             run('env')
-            run("ansible-playbook edx_ansible.yml -i '127.0.0.1,' -c local -e \"openedx_release='{}'\"".format(
-                openedx_release))
+            run('ansible-playbook '
+                '-c local ./edx_ansible.yml '
+                '-i "127.0.0.1," '
+                '-c local'
+                '-e "configuration_version=\'{}\'"'.format(openedx_release),
+                warn_only=True)
 
     return 'openedx::step0', configuration_dir
 
 
 def sandbox1(*args, **kwargs):
     """ Reimplemented in Fabric:
-        github.com/edx/configuration/blob/98c6fb5dcc5e329c2b7fab5629e141568a081ba5/util/install/sandbox.sh """
+        https://github.com/edx/configuration/blob/d87bf6a/util/install/native.sh """
 
     apt_depends('software-properties-common')
     sudo('add-apt-repository -y ppa:ubuntu-toolchain-r/test')
-    apt_depends('build-essential', 'curl', 'git-core', 'libxml2-dev', 'libxslt1-dev',
-                'python-pip', 'libmysqlclient-dev', 'python-apt', 'python-dev', 'libxmlsec1-dev', 'libfreetype6-dev',
+    apt_depends('build-essential', 'software-properties-common', 'curl',
+                'git-core', 'libxml2-dev', 'libxslt1-dev',
+                'python-pip', 'libmysqlclient-dev', 'python-apt',
+                'python-dev', 'libxmlsec1-dev', 'libfreetype6-dev',
                 'swig', 'gcc', 'g++')
+    sudo('apt-get remove -y python-yaml')
+    sudo('pip install --upgrade pip==19.3.1')
+    sudo('pip install --upgrade setuptools==39.0.1')
+    sp = deepcopy(env['sudo_prefix'])
+    env['sudo_prefix'] += '-H '
+    sudo('pip install --upgrade virtualenv==15.2.0')
 
     openedx_release = kwargs.get('OPENEDX_RELEASE', g_openedx_release)
 
-    config_vars = ('edx_platform_version',
-                   'certs_version',
-                   'forum_version',
-                   'xqueue_version',
-                   'configuration_version',
-                   'demo_version',
-                   'NOTIFIER_VERSION',
-                   'INSIGHTS_VERSION',
-                   'ANALYTICS_API_VERSION',
-                   'ECOMMERCE_VERSION',
-                   'ECOMMERCE_WORKER_VERSION',
-                   'PROGRAMS_VERSION')
+    config_vars = (
+        'edx_platform_version', 'certs_version', 'forum_version',
+        'XQUEUE_VERSION', 'configuration_version', 'demo_version',
+        'NOTIFIER_VERSION', 'INSIGHTS_VERSION', 'ANALYTICS_API_VERSION',
+        'ECOMMERCE_VERSION', 'ECOMMERCE_WORKER_VERSION', 'DISCOVERY_VERSION',
+        'THEMES_VERSION'
+    )
 
-    extra_vars_d = {k: (lambda v: '{v}'.format(v=v) if v[0] in ("'", '"') else "'{v}'".format(v=v))(
-        kwargs.get(k, openedx_release)
-    ) for k in config_vars}
+    extra_vars_d = {
+        k: (lambda v: '{v}'.format(v=v) if v[0] in ("'", '"') else "'{v}'".format(v=v))(
+            kwargs.get(k, openedx_release)
+        ) for k in config_vars
+    }
     extra_vars_d['SANDBOX_ENABLE_ECOMMERCE'] = 'True'
     extra_vars = '-e ' + ' -e '.join('{k}={v}'.format(k=k, v=v) for k, v in extra_vars_d.iteritems())
 
@@ -103,11 +136,18 @@ def sandbox1(*args, **kwargs):
                     to_dir=wd, skip_reset=True)
     home = run('echo $HOME')
     sudo('HOME="{home}" pip install -r "{wd}/requirements.txt"'.format(home=home, wd=wd))
+    env['sudo_prefix'] = deepcopy(sp)
+
+    env['sudo_prefix'] = '-E ' + env['sudo_prefix']
 
     # TODO: Run this as a separate offregister task, using new ansible support
     with cd('{wd}/playbooks'.format(wd=wd)), shell_env(**extra_vars_d):
-        run('ansible-playbook -c local ./edx_sandbox.yml -i "localhost," {extra_vars}'.format(extra_vars=extra_vars))
+        run('ansible-playbook ansible-playbook -c local ./openedx_native.yml -i "localhost," {extra_vars}'.format(
+            extra_vars=extra_vars),
+            warn_only=True)
         run('env')
+
+    env['sudo_prefix'] = sp
 
     return 'installed: {}'.format(openedx_release)
 
