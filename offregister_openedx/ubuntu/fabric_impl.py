@@ -1,8 +1,12 @@
 from functools import partial
 from json import load, dump
-from sys import modules
+from sys import modules, version
 
-from io import StringIO
+if version[0] == "2":
+    from cStringIO import StringIO
+
+else:
+    from io import StringIO
 
 from offregister_fab_utils.fs import cmd_avail
 from offutils import update_d

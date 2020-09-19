@@ -1,4 +1,10 @@
-from io import StringIO
+from sys import version
+
+if version[0] == "2":
+    from cStringIO import StringIO
+
+else:
+    from io import StringIO
 from copy import deepcopy
 from functools import partial
 
