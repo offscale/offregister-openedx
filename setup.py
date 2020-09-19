@@ -1,7 +1,8 @@
 from operator import itemgetter
 from setuptools import setup, find_packages
 from os import path, listdir, walk
-from functools import partial, groupby
+from functools import partial
+from itertools import groupby
 from ast import parse
 from distutils.sysconfig import get_python_lib
 
