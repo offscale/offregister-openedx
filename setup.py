@@ -1,5 +1,9 @@
 from operator import itemgetter
 from setuptools import setup, find_packages
+from sys import version
+
+if version[0] == "2":
+    from itertools import imap as map, ifilter as filter
 from os import path, listdir, walk
 from functools import partial
 from itertools import groupby
