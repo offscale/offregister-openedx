@@ -1,10 +1,13 @@
+from operator import methodcaller
 from sys import version
+
+from offutils.util import iteritems
 
 if version[0] == "2":
     from cStringIO import StringIO
-
 else:
     from io import StringIO
+
 from copy import deepcopy
 from functools import partial
 
@@ -188,7 +191,7 @@ def sandbox1(*args, **kwargs):
     }
     extra_vars_d["SANDBOX_ENABLE_ECOMMERCE"] = "True"
     extra_vars = "-e " + " -e ".join(
-        "{k}={v}".format(k=k, v=v) for k, v in list(extra_vars_d.items())
+        "{k}={v}".format(k=k, v=v) for k, v in iteritems(extra_vars_d)
     )
 
     wd = "/var/tmp/configuration"
@@ -235,11 +238,11 @@ def update_conf3(*args, **kwargs):
     if "ALL_EMAILS_TO" in kwargs:
         lms_config = {
             k: (kwargs["ALL_EMAILS_TO"] if isinstance(v, str) and is_email(v) else v)
-            for k, v in list(lms_config.items())
+            for k, v in iteritems(lms_config)
         }
         cms_config = {
             k: (kwargs["ALL_EMAILS_TO"] if isinstance(v, str) and is_email(v) else v)
-            for k, v in list(cms_config.items())
+            for k, v in iteritems(cms_config)
         }
         for k in (
             "FEEDBACK_SUBMISSION_EMAIL",
@@ -256,7 +259,7 @@ def update_conf3(*args, **kwargs):
         # TODO^"""
     for env_conf in ("lms.env", "cms.env"):
         if env_conf in kwargs:
-            for k, v in list(kwargs[env_conf].items()):
+            for k, v in iteritems(kwargs[env_conf]):
                 if "." not in k:
                     (lms_config if env_conf == "lms.env" else cms_config)[k] = v
                 else:
