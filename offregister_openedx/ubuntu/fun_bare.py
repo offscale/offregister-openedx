@@ -36,15 +36,14 @@ def sys_install0(*args, **kwargs):
         "libjpeg8-dev",
         "libmysqlclient20",
         "libmysqlclient-dev",
-        "libpng12-0"
-        "libpng12-dev",
+        "libpng12-0" "libpng12-dev",
         "libxml2",
         "libxml2-dev",
         "libxmlsec1-dev",
         "rdfind",
         "libsqlite3-dev",
         "mongodb",
-        "lynx"
+        "lynx",
     )
 
     sudo("""sed -i 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen""")
@@ -65,11 +64,35 @@ def nodejs_install1(*args, **kwargs):
 
 
 def edx_download_extract2(*args, **kwargs):
-    if exists("/edx/app/edxapp/releases/eucalyptus/3/wb/requirements.txt"):
+    if exists("/edx/app/edxapp/releases/eucalyptus/3/bare/requirements.txt"):
         return False
 
-    run("mkdir -p $HOME/Downloads")
+    edx_app_path = "/edx/app/edxapp"
+    edx_config_path = "/edx/config"
+    src_path = "/usr/local/src_path"
+    venv_path = "/edx/app/edxapp/venv"
+    paths = edx_app_path, edx_config_path, src_path, venv_path
+
+    ensure_quote = partial(ensure_quoted, q='"')
+
+    user, group = (lambda ug: (ug[0], ug[1]) if len(ug) > 1 else (ug[0], ug[0]))(
+        run(
+            '''printf '%s\t%s' "$USER" "$GROUP"''', quiet=True, shell_escape=False
+        ).split("\t")
+    )
+    sudo(
+        'mkdir -p "$HOME/Downloads" {paths} {edx_app_path} '
+        "&& chown -R {user}:{group} {paths}".format(
+            paths=" ".join(map(ensure_quote, paths)),
+            edx_app_path=ensure_quote(edx_app_path),
+            user=user,
+            group=group,
+        ),
+        shell_escape=False,
+    )
+
     with cd("$HOME/Downloads"):
+        """
         docker_ball = "openedx-docker.tar.gz"
         run(
             "curl -sLo {docker_ball} "
@@ -77,6 +100,7 @@ def edx_download_extract2(*args, **kwargs):
                 docker_ball=docker_ball
             )
         )
+        """
 
         edx_ball = "edxapp.tgz"
         run(
@@ -85,24 +109,15 @@ def edx_download_extract2(*args, **kwargs):
                 edx_ball=edx_ball, edx_release_ref=EDX_RELEASE_REF
             )
         )
-        run("tar xzf {edx_ball}".format(edx_ball=edx_ball))
-        run("mv edx-platform* edx-platform")
-
-        edx_app_path = "/edx/app/edxapp"
-        edx_config_path = "/edx/config"
-        src_path = "/usr/local/src_path"
-        venv_path = "/edx/app/edxapp/venv"
-
-        paths = edx_app_path, edx_config_path, src_path, venv_path
-
-        ensure_quote = partial(ensure_quoted, q='"')
-
-        sudo(
-            "mkdir -p {paths} {edx_app_path}"
-            " && chown -R $USER:$GROUP {paths}"
-            ' && cp -r "edx-platform" {edx_app_path}'.format(
-                paths=" ".join(map(ensure_quote, paths)),
-                edx_app_path=ensure_quote(edx_app_path),
+        run(
+            " && ".join(
+                (
+                    "tar xzf {edx_ball}".format(edx_ball=edx_ball),
+                    "mv edx-platform* edx-platform",
+                    'cp -r "edx-platform" {edx_app_path}'.format(
+                        edx_app_path=ensure_quote(edx_app_path)
+                    ),
+                )
             ),
             shell_escape=False,
         )
@@ -110,14 +125,19 @@ def edx_download_extract2(*args, **kwargs):
 
 def python_edx_platform_install3(*args, **kwargs):
     offregister_python.install_venv0(
-        python3=False, virtual_env=VENV, pip_version="9.0.3"
+        python3=False, virtual_env=VENV, pip_version="9.0.3", use_sudo=False
     )
+    user, group = (lambda ug: (ug[0], ug[1]) if len(ug) > 1 else (ug[0], ug[0]))(
+        run(
+            '''printf '%s\t%s' "$USER" "$GROUP"''', quiet=True, shell_escape=False
+        ).split("\t")
+    )
+    sudo('chown -R {user}:{group} /edx'.format(user=user, group=group))
     with cd("/edx/app/edxapp/edx-platform"), shell_env(
         VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)
     ):
-        run("pip install --src $HOME/pip-cache -r requirements/edx/github.txt")
-        run("pip install -r requirements/edx/github.txt")
         run("pip install -r requirements/edx/pre.txt")
+        run("pip install --src /usr/local/src_path -r requirements/edx/github.txt")
         run("pip install astroid==1.6.0 django==1.8.15")
         run("pip install -r requirements/edx/base.txt")
         run("pip install -r requirements/edx/paver.txt")
@@ -170,9 +190,11 @@ def static_collector5(*args, **kwargs):
         )
 
         # Replace duplicated file by a symlink
-        run("rdfind -makesymlinks true -followsymlinks true {edxapp_static_root}".format(
-            edxapp_static_root=edxapp_static_root
-        ))
+        run(
+            "rdfind -makesymlinks true -followsymlinks true {edxapp_static_root}".format(
+                edxapp_static_root=edxapp_static_root
+            )
+        )
 
         run(
             "python manage.py lms collectstatic {collect_static_args}".format(
@@ -185,6 +207,8 @@ def static_collector5(*args, **kwargs):
             )
         )
 
-        run("rdfind -makesymlinks true {edxapp_static_root}".format(
-            edxapp_static_root=edxapp_static_root
-        ))
+        run(
+            "rdfind -makesymlinks true {edxapp_static_root}".format(
+                edxapp_static_root=edxapp_static_root
+            )
+        )
