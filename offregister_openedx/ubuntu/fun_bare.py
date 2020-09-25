@@ -6,7 +6,9 @@ from fabric.contrib.files import append, exists
 from fabric.operations import sudo, run
 
 from offregister_fab_utils.apt import apt_depends
+from offregister_fab_utils import Package
 import offregister_python.ubuntu as offregister_python
+from offregister_fab_utils.ubuntu.misc import user_group_tuple
 from offutils import ensure_quoted
 
 EDX_RELEASE_REF = "open-release/eucalyptus.3"
@@ -64,7 +66,7 @@ def nodejs_install1(*args, **kwargs):
 
 
 def edx_download_extract2(*args, **kwargs):
-    if exists("/edx/app/edxapp/releases/eucalyptus/3/bare/requirements.txt"):
+    if exists("$HOME/Downloads/edx-platform"):
         return False
 
     edx_app_path = "/edx/app/edxapp"
@@ -75,11 +77,7 @@ def edx_download_extract2(*args, **kwargs):
 
     ensure_quote = partial(ensure_quoted, q='"')
 
-    user, group = (lambda ug: (ug[0], ug[1]) if len(ug) > 1 else (ug[0], ug[0]))(
-        run(
-            '''printf '%s\t%s' "$USER" "$GROUP"''', quiet=True, shell_escape=False
-        ).split("\t")
-    )
+    user, group = user_group_tuple()
     sudo(
         'mkdir -p "$HOME/Downloads" {paths} {edx_app_path} '
         "&& chown -R {user}:{group} {paths}".format(
@@ -124,21 +122,32 @@ def edx_download_extract2(*args, **kwargs):
 
 
 def python_edx_platform_install3(*args, **kwargs):
+    if exists("{venv}/lib/python2.7/site-packages/twisted".format(venv=VENV)):
+        return False
+
     offregister_python.install_venv0(
-        python3=False, virtual_env=VENV, pip_version="9.0.3", use_sudo=False
+        python3=False,
+        virtual_env=VENV,
+        pip_version="9.0.3",
+        use_sudo=False,
+        packages=(
+            Package("astroid", "1.6.0"),
+            Package("django", "1.8.15"),
+            Package("markdown", "2.2.1"),
+            Package("Twisted", "20.3.0"),
+        ),
     )
-    user, group = (lambda ug: (ug[0], ug[1]) if len(ug) > 1 else (ug[0], ug[0]))(
-        run(
-            '''printf '%s\t%s' "$USER" "$GROUP"''', quiet=True, shell_escape=False
-        ).split("\t")
-    )
-    sudo('chown -R {user}:{group} /edx'.format(user=user, group=group))
+
+    user, group = user_group_tuple()
+    sudo("chown -R {user}:{group} /edx".format(user=user, group=group))
     with cd("/edx/app/edxapp/edx-platform"), shell_env(
         VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)
     ):
+        run(
+            """sed -i 's/pip/# pip/g; s/setuptools/# setuptools/g' requirements/edx/pre.txt"""
+        )
         run("pip install -r requirements/edx/pre.txt")
         run("pip install --src /usr/local/src_path -r requirements/edx/github.txt")
-        run("pip install astroid==1.6.0 django==1.8.15")
         run("pip install -r requirements/edx/base.txt")
         run("pip install -r requirements/edx/paver.txt")
         run("pip install -r requirements/edx/post.txt")
@@ -148,23 +157,24 @@ def python_edx_platform_install3(*args, **kwargs):
 
 
 def nodejs_edx_platform_install4(*args, **kwargs):
-    path_env = run("echo $PATH", quiet=True)
     with cd("/edx/app/edxapp/edx-platform"), shell_env(
-        PATH="{path_env}:/edx/app/edxapp/edx-platform/node_modules/.bin".format(
-            path_env=path_env
-        )
+        PATH="$HOME/n/bin:/edx/app/edxapp/edx-platform/node_modules/.bin:$PATH"
     ):
-        with cd("node_modules/edx-ui-toolkit"):
+        if not exists("node_modules"):
             run("npm i")
 
+        # with cd("node_modules/edx-ui-toolkit"):
+            # run("npm i -S node-sass==3.12.5")
+            # run("npm i")
+
         with shell_env(
-            NO_PREREQ_INSTALL=1, VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)
+            NO_PREREQ_INSTALL='1', VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)
         ):
             run(
                 " ".join(
                     (
                         "paver update_assets",
-                        "--settings=fun.docker_build_production",
+                        # "--settings=fun.docker_build_production",
                         "--skip-collect",
                     )
                 )
