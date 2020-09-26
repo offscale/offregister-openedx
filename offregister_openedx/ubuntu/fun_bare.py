@@ -1,21 +1,28 @@
 # Derived from https://github.com/openfun/openedx-docker/blob/a395143/releases/eucalyptus/3/bare/Dockerfile
 from functools import partial
+from os import path
+from sys import modules
 
 import offregister_python.ubuntu as offregister_python
+import offregister_service.ubuntu as offregister_service
+import offregister_nginx.ubuntu as offregister_nginx
+
 from fabric.context_managers import cd, shell_env
-from fabric.contrib.files import append, exists
+from fabric.contrib.files import append, exists, upload_template
 from fabric.operations import sudo, run
 from offregister_fab_utils import Package
 from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils.misc import remote_newer_than
 from offregister_fab_utils.ubuntu.misc import user_group_tuple
 from offutils import ensure_quoted
+from pkg_resources import resource_filename
 
 EDX_RELEASE_REF = "open-release/eucalyptus.3"
 
 APP_PATH = "/edx/app/edxapp"
 VENV = "{APP_PATH}/venv".format(APP_PATH=APP_PATH)
 PLATFORM = "{APP_PATH}/edx-platform".format(APP_PATH=APP_PATH)
+STATIC_ROOT = "{APP_PATH}/staticfiles".format(APP_PATH=APP_PATH)
 
 
 def sys_install0(*args, **kwargs):
@@ -200,7 +207,7 @@ def static_collector5(*args, **kwargs):
         return False
 
     collect_static_args = "--noinput"
-    edxapp_static_root = "{APP_PATH}/staticfiles".format(APP_PATH=APP_PATH)
+    edxapp_static_root = ensure_quoted(STATIC_ROOT)
 
     with cd(PLATFORM), shell_env(VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)):
         run(
@@ -239,3 +246,88 @@ def static_collector5(*args, **kwargs):
             ),
             quiet=True,
         )
+
+
+def python_server6(lms_port=9053, cms_port=9054, *args, **kwargs):
+    user, group = user_group_tuple()
+    host = kwargs.get("gunicorn_host", "localhost")
+
+    def _service(name, port):
+        return offregister_service.install_service0(
+            "{name}.gunicorn".format(name=name),
+            **{
+                "ExecStart": "{VENV}/bin/gunicorn {arg}".format(
+                    VENV=VENV,
+                    arg=" ".join(
+                        (
+                            "--name={name}".format(name=name),
+                            "--bind={host}:{port}".format(host=host, port=port),
+                            "--max-requests=1000",
+                            "--timeout=300",
+                            "--workers=3",
+                            "--threads=6",
+                            "{name}.wsgi:application".format(name=name),
+                        )
+                    ),
+                ),
+                "Environments": "Environment=VIRTUAL_ENV={VENV}\n"
+                "Environment=PYTHONPATH={VENV}".format(VENV=VENV),
+                "WorkingDirectory": PLATFORM,
+                "User": user,
+                "Group": group,
+            }
+        )
+
+    return tuple(
+        map(
+            lambda both: _service(both[0], both[1]),
+            (("lms", lms_port), ("cms", cms_port)),
+        )
+    )
+
+
+def nginx_server6(lms_port=9053, cms_port=9054, *args, **kwargs):
+    offregister_nginx.install_nginx0()
+    offregister_nginx.setup_nginx_init1()
+
+    configs_dir = partial(
+        path.join,
+        path.join(
+            path.dirname(
+                path.dirname(
+                    resource_filename(modules[__name__].__package__, "__init__.py")
+                )
+            )
+        ),
+        "config",
+        "openedx-docker",
+    )
+
+    upload_template(
+        configs_dir("cms.conf"),
+        "/etc/nginx/sites-enabled/{server_name}.conf".format(
+            server_name=kwargs["CMS_SERVER_NAME"]
+        ),
+        context={
+            "CMS_PORT": cms_port,
+            "CMS_SERVER_NAME": kwargs["CMS_SERVER_NAME"],
+            "CMS_LISTEN": int(kwargs.get("CMS_LISTEN", "80")),
+            "STATIC_ROOT": STATIC_ROOT,
+        },
+        use_sudo=True,
+    )
+
+    upload_template(
+        configs_dir("lms.conf"),
+        "/etc/nginx/sites-enabled/{server_name}.conf".format(
+            server_name=kwargs["LMS_SERVER_NAME"]
+        ),
+        context={
+            "LMS_PORT": lms_port,
+            "LMS_SERVER_NAME": kwargs["LMS_SERVER_NAME"],
+            "LMS_LISTEN": int(kwargs.get("LMS_LISTEN", "80")),
+            "STATIC_ROOT": STATIC_ROOT,
+        },
+        use_sudo=True,
+    )
+    return sudo("systemctl start nginx", warn_only=True)
