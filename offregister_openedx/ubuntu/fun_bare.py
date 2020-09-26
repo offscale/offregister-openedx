@@ -1,18 +1,21 @@
 # Derived from https://github.com/openfun/openedx-docker/blob/a395143/releases/eucalyptus/3/bare/Dockerfile
 from functools import partial
 
+import offregister_python.ubuntu as offregister_python
 from fabric.context_managers import cd, shell_env
 from fabric.contrib.files import append, exists
 from fabric.operations import sudo, run
-
-from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils import Package
-import offregister_python.ubuntu as offregister_python
+from offregister_fab_utils.apt import apt_depends
+from offregister_fab_utils.misc import remote_newer_than
 from offregister_fab_utils.ubuntu.misc import user_group_tuple
 from offutils import ensure_quoted
 
 EDX_RELEASE_REF = "open-release/eucalyptus.3"
-VENV = "/edx/app/edxapp/venv"
+
+APP_PATH = "/edx/app/edxapp"
+VENV = "{APP_PATH}/venv".format(APP_PATH=APP_PATH)
+PLATFORM = "{APP_PATH}/edx-platform".format(APP_PATH=APP_PATH)
 
 
 def sys_install0(*args, **kwargs):
@@ -69,28 +72,25 @@ def edx_download_extract2(*args, **kwargs):
     if exists("$HOME/Downloads/edx-platform"):
         return False
 
-    edx_app_path = "/edx/app/edxapp"
     edx_config_path = "/edx/config"
     src_path = "/usr/local/src_path"
-    venv_path = "/edx/app/edxapp/venv"
-    upload_path = "/edx/app/edxapp/uploads"
-    log_path = "/edx/app/edxapp/log"
-    paths = edx_app_path, edx_config_path, src_path, venv_path, upload_path, log_path
+    upload_path = "{APP_PATH}/uploads".format(APP_PATH=APP_PATH)
+    log_path = "{APP_PATH}/log".format(APP_PATH=APP_PATH)
+    paths = APP_PATH, edx_config_path, src_path, VENV, upload_path, log_path
 
     ensure_quote = partial(ensure_quoted, q='"')
 
     user, group = user_group_tuple()
     sudo(
-        'mkdir -p "$HOME/Downloads" {paths} {edx_app_path} '
+        'mkdir -p "$HOME/Downloads" {paths} '
         "&& chown -R {user}:{group} {paths}".format(
             paths=" ".join(map(ensure_quote, paths)),
-            edx_app_path=ensure_quote(edx_app_path),
             user=user,
             group=group,
         ),
         shell_escape=False,
     )
-    run("touch /edx/app/edxapp/log/edx.log")
+    run("touch '{APP_PATH}/log/edx.log'".format(APP_PATH=APP_PATH))
 
     with cd("$HOME/Downloads"):
         """
@@ -116,7 +116,7 @@ def edx_download_extract2(*args, **kwargs):
                     "tar xzf {edx_ball}".format(edx_ball=edx_ball),
                     "mv edx-platform* edx-platform",
                     'cp -r "edx-platform" {edx_app_path}'.format(
-                        edx_app_path=ensure_quote(edx_app_path)
+                        edx_app_path=ensure_quote(APP_PATH)
                     ),
                 )
             ),
@@ -145,9 +145,7 @@ def python_edx_platform_install3(*args, **kwargs):
 
     user, group = user_group_tuple()
     sudo("chown -R {user}:{group} /edx".format(user=user, group=group))
-    with cd("/edx/app/edxapp/edx-platform"), shell_env(
-        VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)
-    ):
+    with cd(PLATFORM), shell_env(VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)):
         run(
             """sed -i 's/pip/# pip/g; s/setuptools/# setuptools/g' requirements/edx/pre.txt"""
         )
@@ -161,25 +159,15 @@ def python_edx_platform_install3(*args, **kwargs):
 
 
 def nodejs_edx_platform_install4(*args, **kwargs):
-    platform = "/edx/app/edxapp/edx-platform"
-    last_changed = int(
-        run(
-            "stat -c '%Z' '{platform}/lms/static/css/lms-footer.css'".format(
-                platform=platform
-            ),
-            warn_only=True,
-            quiet=True
-        )
-        or 0
-    )
-
-    if (
-        last_changed > 1601107060
-    ):  # 2020-09-26; `touch` the file to make this process rerun
+    if remote_newer_than(
+        "{platform}/lms/static/css/lms-footer.css".format(platform=PLATFORM),
+        # 2020-09-26; `touch` the file to make this process rerun
+        1601107060,
+    ):
         return False
 
-    with cd(platform), shell_env(
-        PATH="$HOME/n/bin:/edx/app/edxapp/edx-platform/node_modules/.bin:$PATH"
+    with cd(PLATFORM), shell_env(
+        PATH="$HOME/n/bin:{PLATFORM}/node_modules/.bin:$PATH".format(PLATFORM=PLATFORM)
     ):
         if not exists("node_modules"):
             run("npm i")
@@ -204,29 +192,17 @@ def nodejs_edx_platform_install4(*args, **kwargs):
 
 
 def static_collector5(*args, **kwargs):
-    platform = "/edx/app/edxapp/edx-platform"
-    last_changed = int(
-        run(
-            "stat -c '%Z' '{platform}/cms/static/css/edx-icons.css'".format(
-                platform=platform
-            ),
-            warn_only=True,
-            quiet=True
-        )
-        or 0
-    )
-
-    if (
-        last_changed > 1601107060
-    ):  # 2020-09-26; `touch` the file to make this process rerun
+    if remote_newer_than(
+        "{platform}/cms/static/css/edx-icons.css".format(platform=PLATFORM),
+        # 2020-09-26; `touch` the file to make this process rerun
+        1601107060,
+    ):
         return False
 
     collect_static_args = "--noinput"
-    edxapp_static_root = "/edx/app/edxapp/staticfiles"
+    edxapp_static_root = "{APP_PATH}/staticfiles".format(APP_PATH=APP_PATH)
 
-    with cd("/edx/app/edxapp/edx-platform"), shell_env(
-        VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)
-    ):
+    with cd(PLATFORM), shell_env(VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)):
         run(
             "python manage.py lms collectstatic --link {collect_static_args}".format(
                 collect_static_args=collect_static_args
@@ -243,7 +219,7 @@ def static_collector5(*args, **kwargs):
             "rdfind -makesymlinks true -followsymlinks true {edxapp_static_root}".format(
                 edxapp_static_root=edxapp_static_root
             ),
-            quiet=True
+            quiet=True,
         )
 
         run(
@@ -261,5 +237,5 @@ def static_collector5(*args, **kwargs):
             "rdfind -makesymlinks true {edxapp_static_root}".format(
                 edxapp_static_root=edxapp_static_root
             ),
-            quiet=True
+            quiet=True,
         )
