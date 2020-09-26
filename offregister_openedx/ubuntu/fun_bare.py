@@ -73,7 +73,9 @@ def edx_download_extract2(*args, **kwargs):
     edx_config_path = "/edx/config"
     src_path = "/usr/local/src_path"
     venv_path = "/edx/app/edxapp/venv"
-    paths = edx_app_path, edx_config_path, src_path, venv_path
+    upload_path = "/edx/app/edxapp/uploads"
+    log_path = "/edx/app/edxapp/log"
+    paths = edx_app_path, edx_config_path, src_path, venv_path, upload_path, log_path
 
     ensure_quote = partial(ensure_quoted, q='"')
 
@@ -88,6 +90,7 @@ def edx_download_extract2(*args, **kwargs):
         ),
         shell_escape=False,
     )
+    run("touch /edx/app/edxapp/log/edx.log")
 
     with cd("$HOME/Downloads"):
         """
@@ -135,6 +138,8 @@ def python_edx_platform_install3(*args, **kwargs):
             Package("django", "1.8.15"),
             Package("markdown", "2.2.1"),
             Package("Twisted", "20.3.0"),
+            Package("redis", "3.3.7"),
+            Package("gunicorn", "19.9.0"),
         ),
     )
 
@@ -153,27 +158,44 @@ def python_edx_platform_install3(*args, **kwargs):
         run("pip install -r requirements/edx/post.txt")
         run("pip install -r requirements/edx/local.txt")
         run("pip install -r requirements/edx/development.txt")
-        run("pip install redis==3.3.7 gunicorn==19.9.0")
 
 
 def nodejs_edx_platform_install4(*args, **kwargs):
-    with cd("/edx/app/edxapp/edx-platform"), shell_env(
+    platform = "/edx/app/edxapp/edx-platform"
+    last_changed = int(
+        run(
+            "stat -c '%Z' '{platform}/lms/static/css/lms-footer.css'".format(
+                platform=platform
+            ),
+            warn_only=True,
+            quiet=True
+        )
+        or 0
+    )
+
+    if (
+        last_changed > 1601107060
+    ):  # 2020-09-26; `touch` the file to make this process rerun
+        return False
+
+    with cd(platform), shell_env(
         PATH="$HOME/n/bin:/edx/app/edxapp/edx-platform/node_modules/.bin:$PATH"
     ):
         if not exists("node_modules"):
             run("npm i")
 
         # with cd("node_modules/edx-ui-toolkit"):
-            # run("npm i -S node-sass==3.12.5")
-            # run("npm i")
+        # run("npm i -S node-sass==3.12.5")
+        # run("npm i")
 
         with shell_env(
-            NO_PREREQ_INSTALL='1', VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)
+            NO_PREREQ_INSTALL="1", VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)
         ):
             run(
                 " ".join(
                     (
-                        "paver update_assets",
+                        "paver",
+                        "update_assets",
                         # "--settings=fun.docker_build_production",
                         "--skip-collect",
                     )
@@ -182,7 +204,24 @@ def nodejs_edx_platform_install4(*args, **kwargs):
 
 
 def static_collector5(*args, **kwargs):
-    collect_static_args = "--noinput --settings=fun.docker_run"
+    platform = "/edx/app/edxapp/edx-platform"
+    last_changed = int(
+        run(
+            "stat -c '%Z' '{platform}/cms/static/css/edx-icons.css'".format(
+                platform=platform
+            ),
+            warn_only=True,
+            quiet=True
+        )
+        or 0
+    )
+
+    if (
+        last_changed > 1601107060
+    ):  # 2020-09-26; `touch` the file to make this process rerun
+        return False
+
+    collect_static_args = "--noinput"
     edxapp_static_root = "/edx/app/edxapp/staticfiles"
 
     with cd("/edx/app/edxapp/edx-platform"), shell_env(
@@ -203,7 +242,8 @@ def static_collector5(*args, **kwargs):
         run(
             "rdfind -makesymlinks true -followsymlinks true {edxapp_static_root}".format(
                 edxapp_static_root=edxapp_static_root
-            )
+            ),
+            quiet=True
         )
 
         run(
@@ -220,5 +260,6 @@ def static_collector5(*args, **kwargs):
         run(
             "rdfind -makesymlinks true {edxapp_static_root}".format(
                 edxapp_static_root=edxapp_static_root
-            )
+            ),
+            quiet=True
         )
