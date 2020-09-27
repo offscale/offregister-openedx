@@ -258,7 +258,7 @@ def python_server6(lms_port=9053, cms_port=9054, *args, **kwargs):
             **{
                 "ExecStart": "{VENV}/bin/gunicorn {arg}".format(
                     VENV=VENV,
-                    arg=" ".join(
+                    arg=" \\\n\t\t\t\t\t    ".join(
                         (
                             "--name={name}".format(name=name),
                             "--bind={host}:{port}".format(host=host, port=port),
@@ -309,12 +309,14 @@ def nginx_server6(lms_port=9053, cms_port=9054, *args, **kwargs):
             server_name=kwargs["CMS_SERVER_NAME"]
         ),
         context={
+            "CMS_HOST": "localhost",
             "CMS_PORT": cms_port,
             "CMS_SERVER_NAME": kwargs["CMS_SERVER_NAME"],
             "CMS_LISTEN": int(kwargs.get("CMS_LISTEN", "80")),
             "STATIC_ROOT": STATIC_ROOT,
         },
         use_sudo=True,
+        backup=False,
     )
 
     upload_template(
@@ -323,11 +325,13 @@ def nginx_server6(lms_port=9053, cms_port=9054, *args, **kwargs):
             server_name=kwargs["LMS_SERVER_NAME"]
         ),
         context={
+            "LMS_HOST": "localhost",
             "LMS_PORT": lms_port,
             "LMS_SERVER_NAME": kwargs["LMS_SERVER_NAME"],
             "LMS_LISTEN": int(kwargs.get("LMS_LISTEN", "80")),
             "STATIC_ROOT": STATIC_ROOT,
         },
         use_sudo=True,
+        backup=False,
     )
     return sudo("systemctl start nginx", warn_only=True)
