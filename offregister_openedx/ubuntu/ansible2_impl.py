@@ -1,68 +1,40 @@
-from fabric.context_managers import cd, shell_env
+# Based off Sep 11, 2020 version of
+# https://openedx.atlassian.net/wiki/spaces/OpenOPS/pages/146440579/Native+Open+edX+platform+Ubuntu+16.04+64+bit+Installation
+
+from os import environ
+
+from fabric.context_managers import shell_env
 from fabric.contrib.files import exists
 from fabric.operations import run, sudo
-
-import offregister_python.ubuntu as offregister_python
 from offregister_fab_utils.apt import apt_depends
-from offregister_fab_utils.ubuntu.misc import user_group_tuple
+from offutils import ensure_quoted
 
-EDX_RELEASE_REF = "open-release/juniper.3"
-VENV = "/tmp/ansible_bootstrap"
+EDX_RELEASE_REF = environ.get("EDX_RELEASE_REF", "open-release/juniper.3")
+CONFIGURATION_DIR = "/tmp/edx/configuration"
 
 
 def system_install0(*args, **kwargs):
-    apt_depends(
-        "gnupg",
-        "python2.7",
-        "python2.7-dev",
-        "python3-dev",
-        "python3-venv",
-        "python-pip",
-        "python-apt",
-        "python-jinja2",
-        "build-essential",
-        "sudo",
-        "git-core",
-        "libmysqlclient-dev",
-        "libffi-dev",
-        "libssl-dev",
-        "python-virtualenv",
+    apt_depends("curl", "gnupg", "git", "software-properties-common")
+
+
+def config_yml1(*args, **kwargs):
+    # if exists("config.yml"): return False
+
+    run(
+        'printf \'EDXAPP_LMS_BASE: "%s"\nEDXAPP_CMS_BASE: "%s"\' '
+        "{LMS_SERVER_NAME} {CMS_SERVER_NAME} > config.yml".format(
+            LMS_SERVER_NAME=ensure_quoted(kwargs["LMS_SERVER_NAME"]),
+            CMS_SERVER_NAME=ensure_quoted(kwargs["CMS_SERVER_NAME"]),
+        )
     )
 
 
-def python_install1(*args, **kwargs):
-    if exists("{VENV}/lib/python2.7/site-packages/ansible".format(VENV=VENV)) or exists(
-        "{VENV}/lib/python3.5/site-packages/ansible_collections".format(VENV=VENV)
-    ):
-        return False
-
-    offregister_python.install_venv0(
-        python3=True,
-        virtual_env=VENV,
-        pip_version="20.0.2",
-        use_sudo=False,
-        packages=("ansible",),
-    )
-
-    user, group = user_group_tuple()
-    sudo("chown -R {user}:{group} {VENV}".format(user=user, group=group, VENV=VENV))
-    with shell_env(VIRTUAL_ENV=VENV, PATH="{VENV}/bin:$PATH".format(VENV=VENV)):
-        for fname in "pre-requirements.txt", "requirements.txt":
-            run(
-                "pip install -qr "
-                "https://raw.githubusercontent.com/edx/configuration/{EDX_RELEASE_REF}/{fname} "
-                "--exists-action w".format(EDX_RELEASE_REF=EDX_RELEASE_REF, fname=fname)
-            )
-
-
-def ansible_run2(*args, **kwargs):
-    home = run("printf '%s' \"$HOME\"", quiet=True)
-    configuration_dir = "{home}/repos/edx/configuration".format(home=home)
-    git_dir = "{configuration_dir}/.git".format(configuration_dir=configuration_dir)
-    run("mkdir -p {configuration_dir}".format(configuration_dir=configuration_dir))
+def configuration_prepare1(*args, **kwargs):
+    git_dir = "{CONFIGURATION_DIR}/.git".format(CONFIGURATION_DIR=CONFIGURATION_DIR)
+    run("mkdir -p {CONFIGURATION_DIR}".format(CONFIGURATION_DIR=CONFIGURATION_DIR))
     if exists(git_dir):
         with shell_env(
-            GIT_WORK_TREE=configuration_dir,
+            GIT_WORK_TREE=CONFIGURATION_DIR,
             GIT_DIR=git_dir,
         ):
             run(
@@ -76,26 +48,42 @@ def ansible_run2(*args, **kwargs):
                 (
                     "git clone https://github.com/edx/configuration",
                     "--depth=1",
-                    "--branch {EDX_RELEASE_REF} {configuration_dir}".format(
+                    "--branch {EDX_RELEASE_REF} {CONFIGURATION_DIR}".format(
                         EDX_RELEASE_REF=EDX_RELEASE_REF,
-                        configuration_dir=configuration_dir,
+                        CONFIGURATION_DIR=CONFIGURATION_DIR,
                     ),
                 )
             )
         )
-    with cd(
-        "{configuration_dir}/playbooks".format(configuration_dir=configuration_dir)
-    ), shell_env(VIRTUAL_ENV=VENV, PATH="{VENV}/bin:$PATH".format(VENV=VENV)):
-        run(
-            " ".join(
-                (
-                    "ansible-playbook",
-                    "edx_ansible.yml",
-                    "-i '127.0.0.1,'",
-                    "-c local",
-                    "-e 'configuration_version={EDX_RELEASE_REF}'".format(
-                        EDX_RELEASE_REF=EDX_RELEASE_REF
-                    ),
-                )
+
+
+def bootstrap2(*args, **kwargs):
+    with shell_env(OPENEDX_RELEASE=EDX_RELEASE_REF):
+        sudo(
+            "bash {CONFIGURATION_DIR}/util/install/ansible-bootstrap.sh".format(
+                CONFIGURATION_DIR=CONFIGURATION_DIR
             )
         )
+        sudo(
+            "bash {CONFIGURATION_DIR}/util/install/generate-passwords.sh".format(
+                CONFIGURATION_DIR=CONFIGURATION_DIR
+            )
+        )
+
+
+def ansible_native3(*args, **kwargs):
+    system_version = run("lsb_release -rs", quiet=True)
+
+    native_sh = ensure_quoted(
+        "{CONFIGURATION_DIR}/util/install/native.sh".format(
+            CONFIGURATION_DIR=CONFIGURATION_DIR
+        )
+    )
+    run(
+        "sed -i 's/16.04/{system_version}/g' {native_sh}".format(
+            system_version=system_version, native_sh=native_sh
+        )
+    )
+
+    with shell_env(OPENEDX_RELEASE=EDX_RELEASE_REF):
+        sudo("bash {native_sh}".format(native_sh=native_sh))
