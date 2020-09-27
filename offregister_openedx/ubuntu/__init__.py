@@ -1,1 +1,1 @@
-from .fun_bare import *
+from .ansible2_impl import *

@@ -101,13 +101,18 @@ def edx_download_extract2(*args, **kwargs):
 
     with cd("$HOME/Downloads"):
         """
-        docker_ball = "openedx-docker.tar.gz"
+        openedx_docker_archive = "openedx-docker.tar.gz"
         run(
-            "curl -sLo {docker_ball} "
-            "https://api.github.com/repos/openfun/openedx-docker/tarball".format(
-                docker_ball=docker_ball
+            "curl -L https://api.github.com/repos/openfun/openedx-docker/tarball -o {openedx_docker_archive}".format(
+                openedx_docker_archive=openedx_docker_archive
             )
         )
+        run(
+            "tar xf {openedx_docker_archive}".format(
+                openedx_docker_archive=openedx_docker_archive
+            )
+        )
+        run("mv openfun-openedx-docker* openfun-openedx-docker")
         """
 
         edx_ball = "edxapp.tgz"
@@ -151,7 +156,7 @@ def python_edx_platform_install3(*args, **kwargs):
     )
 
     user, group = user_group_tuple()
-    sudo("chown -R {user}:{group} /edx".format(user=user, group=group))
+    sudo("chown -R {user}:{group} {VENV}".format(user=user, group=group, VENV=VENV))
     with cd(PLATFORM), shell_env(VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)):
         run(
             """sed -i 's/pip/# pip/g; s/setuptools/# setuptools/g' requirements/edx/pre.txt"""
