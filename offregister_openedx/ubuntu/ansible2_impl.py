@@ -1,4 +1,4 @@
-# Based off Sep 11, 2020 version of
+# Based off Sep 11, 2020 (v36) version of
 # https://openedx.atlassian.net/wiki/spaces/OpenOPS/pages/146440579/Native+Open+edX+platform+Ubuntu+16.04+64+bit+Installation
 
 from os import environ
@@ -14,7 +14,8 @@ CONFIGURATION_DIR = "/tmp/edx/configuration"
 
 
 def system_install0(*args, **kwargs):
-    apt_depends("curl", "gnupg", "git", "software-properties-common")
+    apt_depends("curl", "gnupg", "git", "software-properties-common", "python-pip", "python-dev")
+    sudo('pip install -U pyopenssl')
 
 
 def config_yml1(*args, **kwargs):
