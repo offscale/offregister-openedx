@@ -3,13 +3,12 @@ from functools import partial
 from os import path
 from sys import modules
 
+import offregister_nginx.ubuntu as offregister_nginx
 import offregister_python.ubuntu as offregister_python
 import offregister_service.ubuntu as offregister_service
-import offregister_nginx.ubuntu as offregister_nginx
-
 from fabric.context_managers import cd, shell_env
 from fabric.contrib.files import append, exists, upload_template
-from fabric.operations import sudo, run
+from fabric.operations import run, sudo
 from offregister_fab_utils import Package
 from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils.misc import remote_newer_than

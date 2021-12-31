@@ -14,8 +14,10 @@ CONFIGURATION_DIR = "/tmp/edx/configuration"
 
 
 def system_install0(*args, **kwargs):
-    apt_depends("curl", "gnupg", "git", "software-properties-common", "python-pip", "python-dev")
-    sudo('pip install -U pyopenssl')
+    apt_depends(
+        "curl", "gnupg", "git", "software-properties-common", "python-pip", "python-dev"
+    )
+    sudo("pip install -U pyopenssl")
 
 
 def config_yml1(*args, **kwargs):

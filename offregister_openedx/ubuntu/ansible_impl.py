@@ -1,4 +1,3 @@
-from operator import methodcaller
 from sys import version
 
 from offutils.util import iteritems
@@ -10,22 +9,21 @@ else:
 
 from copy import deepcopy
 from functools import partial
-
-from json import load, dumps
+from json import dumps, load
 from os import path
 
-from fabric.context_managers import cd, shell_env, prefix
-from fabric.contrib.files import upload_template, sed, exists, append
-from fabric.operations import sudo, run, put
+from fabric.context_managers import cd, prefix, shell_env
+from fabric.contrib.files import append, exists, sed, upload_template
+from fabric.operations import put, run, sudo
 from fabric.state import env
 from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils.git import clone_or_update
-from offregister_fab_utils.misc import timeout, get_load_remote_file
+from offregister_fab_utils.misc import get_load_remote_file, timeout
 from offregister_fab_utils.ubuntu.systemd import (
-    restart_systemd,
     install_upgrade_service,
+    restart_systemd,
 )
-from offutils import gen_random_str, pp, it_consumes
+from offutils import gen_random_str, it_consumes, pp
 from pkg_resources import resource_filename
 
 from offregister_openedx.utils import OTemplate, is_email

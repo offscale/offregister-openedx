@@ -1,5 +1,5 @@
 from functools import partial
-from json import load, dump
+from json import dump, load
 from sys import modules, version
 
 if version[0] == "2":
@@ -8,18 +8,17 @@ if version[0] == "2":
 else:
     from io import StringIO
 
-from offregister_fab_utils.fs import cmd_avail
-from offutils import update_d
-from pkg_resources import resource_filename
 from os import path
 
-from fabric.context_managers import cd, shell_env, settings
+from fabric.context_managers import cd, settings, shell_env
 from fabric.contrib.files import append, exists, upload_template
-from fabric.operations import sudo, put
-
+from fabric.operations import put, sudo
 from offregister_fab_utils.apt import apt_depends
+from offregister_fab_utils.fs import cmd_avail
 from offregister_fab_utils.git import clone_or_update
 from offregister_fab_utils.ubuntu.systemd import restart_systemd
+from offutils import update_d
+from pkg_resources import resource_filename
 
 # Global variables
 g_openedx_release = "open-release/ginkgo.master"

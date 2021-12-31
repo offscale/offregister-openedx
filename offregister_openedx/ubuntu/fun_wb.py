@@ -1,12 +1,11 @@
 # Derived from https://github.com/openfun/openedx-docker/blob/7f44edb/releases/eucalyptus/3/wb/Dockerfile
 from functools import partial
 
+import offregister_python.ubuntu as offregister_python
 from fabric.context_managers import cd, shell_env
 from fabric.contrib.files import append, exists
-from fabric.operations import sudo, run
-
+from fabric.operations import run, sudo
 from offregister_fab_utils.apt import apt_depends
-import offregister_python.ubuntu as offregister_python
 from offutils import ensure_quoted
 
 VENV = "/edx/app/edxapp/venv"

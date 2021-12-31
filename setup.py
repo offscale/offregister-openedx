@@ -1,14 +1,16 @@
 from operator import itemgetter
-from setuptools import setup, find_packages
 from sys import version
+
+from setuptools import find_packages, setup
 
 if version[0] == "2":
     from itertools import imap as map, ifilter as filter
-from os import path, listdir, walk
-from functools import partial
-from itertools import groupby
+
 from ast import parse
 from distutils.sysconfig import get_python_lib
+from functools import partial
+from itertools import groupby
+from os import listdir, path, walk
 
 if __name__ == "__main__":
     package_name = "offregister_openedx"
