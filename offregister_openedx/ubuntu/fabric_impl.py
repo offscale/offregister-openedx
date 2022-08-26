@@ -10,9 +10,9 @@ else:
 
 from os import path
 
-from fabric.context_managers import cd, settings, shell_env
-from fabric.contrib.files import append, exists, upload_template
-from fabric.operations import put, sudo
+from fabric.context_managers import settings, shell_env
+from fabric.contrib.files import append, exists
+from fabric.operations import sudo
 from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils.fs import cmd_avail
 from offregister_fab_utils.git import clone_or_update
@@ -37,37 +37,38 @@ def install0(*args, **kwargs):
     openedx_release = kwargs.get("OPENEDX_RELEASE", g_openedx_release)
 
     # Services
-    apt_depends("openjdk-8-jdk", "memcached", "rabbitmq-server")
+    apt_depends(c, "openjdk-8-jdk", "memcached", "rabbitmq-server")
 
-    if sudo("dpkg -s mysql-server", quiet=True, warn_only=True).failed:
-        with shell_env(DEBIAN_FRONTEND="noninteractive"):
-            # TODO: Better password handling; I think this can get leaked, even with `quiet=True`?
-            sudo(
-                """
-            debconf-set-selections <<< 'mysql-server mysql-server/root_password password {password}';
-            debconf-set-selections <<< 'mysql-server mysql-server/root_password_again password {password}';
-            """.format(
-                    password=kwargs["MYSQL_PASSWORD"]
-                ),
-                quiet=True,
-            )
-            apt_depends("mysql-server", "mysql-client", "libmysqlclient-dev")
-            sudo("systemctl unmask mysql")
-            restart_systemd("mysql")
+    if c.sudo("dpkg -s mysql-server", hide=True, warn=True).exited != 0:
+        env = dict(DEBIAN_FRONTEND="noninteractive")
+        # TODO: Better password handling; I think this can get leaked, even with `hide=True`?
+        c.sudo(
+            """
+        debconf-set-selections <<< 'mysql-server mysql-server/root_password password {password}';
+        debconf-set-selections <<< 'mysql-server mysql-server/root_password_again password {password}';
+        """.format(
+                password=kwargs["MYSQL_PASSWORD"]
+            ),
+            hide=True,
+            env=env,
+        )
+        apt_depends(c, "mysql-server", "mysql-client", "libmysqlclient-dev")
+        c.sudo("systemctl unmask mysql")
+        restart_systemd(c, "mysql")
 
-    if sudo("dpkg -s mongodb-org", quiet=True, warn_only=True).failed:
-        sudo(
+    if c.sudo("dpkg -s mongodb-org", hide=True, warn=True).exited != 0:
+        c.sudo(
             "apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv 0C49F3730359A14518585931BC711F9BA15703C6"
         )
-        sudo(
+        c.sudo(
             'echo "deb [ arch=amd64,arm64 ] http://repo.mongodb.org/apt/ubuntu xenial/mongodb-org/3.4 multiverse"'
             " | sudo tee /etc/apt/sources.list.d/mongodb-org-3.4.list"
         )
-        apt_depends("mongodb-org")
+        apt_depends(c, "mongodb-org")
         restart_systemd("mongod")
 
-    if sudo("dpkg -s elasticsearch", quiet=True, warn_only=True).failed:
-        sudo(
+    if c.sudo("dpkg -s elasticsearch", hide=True, warn=True).exited != 0:
+        c.sudo(
             "wget -O - http://packages.elasticsearch.org/GPG-KEY-elasticsearch | apt-key add -"
         )
 
@@ -77,12 +78,13 @@ def install0(*args, **kwargs):
             "deb http://packages.elasticsearch.org/elasticsearch/0.90/debian stable main",
             use_sudo=True,
         )
-        sudo("apt update")
-        sudo("apt-get install -y elasticsearch=0.90.13")
-        sudo("apt-mark hold elasticsearch")
+        c.sudo("apt update")
+        c.sudo("apt-get install -y elasticsearch=0.90.13")
+        c.sudo("apt-mark hold elasticsearch")
 
     # LMS/CMS install prep
     apt_depends(
+        c,
         "gettext",
         "gfortran",
         "graphviz",
@@ -108,22 +110,22 @@ def install0(*args, **kwargs):
     )
 
     # Production
-    apt_depends("supervisor", "nginx")
+    apt_depends(c, "supervisor", "nginx")
 
     # LMS/CMS install
-    if sudo("id -u {user}".format(user=g_user), warn_only=True, quiet=True).failed:
-        sudo("useradd -UM {user}".format(user=g_user))
-    sudo(
+    if c.sudo("id -u {user}".format(user=g_user), warn=True, hide=True).exited != 0:
+        c.sudo("useradd -UM {user}".format(user=g_user))
+    c.sudo(
         "mkdir -p {root} {root}/staticfiles {root}/uploads $HOME/.npm $HOME/.config".format(
             root=g_context["EDXROOT"]
         )
     )
-    sudo(
+    c.sudo(
         "touch {root}/lms.env.json {root}/cms.env.json".format(
             root=g_context["EDXROOT"]
         )
     )
-    sudo(
+    c.sudo(
         "chown -R {user}:{user} {root} $HOME/.cache $HOME/.npm $HOME/.config".format(
             user=g_user, root=g_context["EDXROOT"]
         )
@@ -145,31 +147,33 @@ def install0(*args, **kwargs):
     if kwargs.get("destroy_virtualenv", False):
         g_edxapp("rm -rf {}".format(g_context["VENV"]))
 
-    if not exists(g_context["VENV"]):
+    if not exists(c, runner=c.run, path=g_context["VENV"]):
         g_edxapp(
             "virtualenv --system-site-packages {}".format(g_context["VENV"])
         )  # pysqlite wasn't building
         cache_dir = "{}/{}".format(g_context["VENV"], ".cache")
-        sudo("mkdir -p {cache_dir}".format(cache_dir=cache_dir))
-        sudo(
+        c.sudo("mkdir -p {cache_dir}".format(cache_dir=cache_dir))
+        c.sudo(
             "chown -R {user}:{user} {cache_dir}".format(
                 user=g_user, cache_dir=cache_dir
             )
         )
 
-        with cd(g_platform_dir), shell_env(
+        with c.cd(g_platform_dir), shell_env(
             PATH="{}/bin:$PATH".format(g_context["VENV"]),
             VIRTUAL_ENV=g_context["VENV"],
             PIP_DOWNLOAD_CACHE=cache_dir,
         ):
             for f in ("pre", "github", "local", "base", "paver", "post"):
                 g_edxapp(
-                    "pip install --no-cache-dir -r requirements/edx/{f}.txt".format(f=f)
+                    "python -m pip install --no-cache-dir -r requirements/edx/{f}.txt".format(
+                        f=f
+                    )
                 )
             g_edxapp("nodeenv -p")  # Install node environment in same virtualenv
             g_edxapp("paver install_prereqs")
-    if not cmd_avail("rtlcss"):
-        sudo("npm i -g rtlcss")
+    if not cmd_avail(c, "rtlcss"):
+        c.sudo("npm i -g rtlcss")
     g_edxapp(
         "mkdir -p {platform_dir}/lms/envs {platform_dir}/cms/envs".format(
             platform_dir=g_platform_dir
@@ -190,14 +194,14 @@ def configure1(
     mysql_password = "{}".format(kwargs["MYSQL_PASSWORD"])
 
     # Configure database
-    existent = sudo(
+    existent = c.sudo(
         "mysql -h localhost -u'{user}' -p'{password}' -Bse 'use {user}'".format(
             user=g_user, password=mysql_password
         ),
-        warn_only=True,
-        quiet=True,
+        warn=True,
+        hide=True,
     )
-    if existent.failed:
+    if existent.exited != 0:
         ftmp = g_edxapp("mktemp --suffix .sql")
         sio = StringIO()
         sio.write(
@@ -207,16 +211,16 @@ def configure1(
                 user=g_user, password=mysql_password
             )
         )
-        put(sio, ftmp, use_sudo=True)
-        sudo(
+        c.put(sio, ftmp, use_sudo=True)
+        c.sudo(
             "mysql -h localhost -u root -p'{password}' < {ftmp}".format(
                 password=mysql_password, ftmp=ftmp
             ),
-            shell_escape=False,  # quiet=True
-            warn_only=True,
+            # hide=True
+            warn=True,
         )
-        if exists(ftmp):
-            sudo("rm {ftmp}".format(ftmp=ftmp))
+        if exists(c, runner=c.run, path=ftmp):
+            c.sudo("rm {ftmp}".format(ftmp=ftmp))
 
     # Configuration files
     env = {
@@ -286,7 +290,7 @@ def configure1(
         return fin()
 
     # Configure database users
-    with cd(g_platform_dir), shell_env(
+    with c.cd(g_platform_dir), shell_env(
         PATH="{}/bin:$PATH".format(g_context["VENV"]), VIRTUAL_ENV=g_context["VENV"]
     ):
         lms_cmd = "./manage.py lms --settings={deployment}".format(
@@ -340,7 +344,7 @@ def restart_services3(*args, **kwargs):
 
 
 def regen(system, paver=True, supervisor=True, deployment="production"):
-    with cd(g_platform_dir), shell_env(
+    with c.cd(g_platform_dir), shell_env(
         PATH="{}/bin:$PATH".format(g_context["VENV"]), VIRTUAL_ENV=g_context["VENV"]
     ):
         if paver:
@@ -350,14 +354,14 @@ def regen(system, paver=True, supervisor=True, deployment="production"):
                 )
             )
         if supervisor:
-            sudo("supervisorctl restart {system}:".format(system=system))
+            c.sudo("supervisorctl restart {system}:".format(system=system))
 
 
 def update_and_put(d, merge_d, put_location, use_sudo=False):
     d.update(merge_d)
     sio = StringIO()
     dump(d, sio)
-    return put(sio, put_location, use_sudo=use_sudo)
+    return c.put(sio, put_location, use_sudo=use_sudo)
 
 
 def deploy(system, deployment, auth_config, env_config, nginx_config):
@@ -381,7 +385,8 @@ def deploy(system, deployment, auth_config, env_config, nginx_config):
         use_sudo=True,
     )
 
-    upload_template(
+    upload_template_fmt(
+        c,
         g_file(system, "{deployment}.py".format(deployment=deployment)),
         "{platform_dir}/{system}/envs/{deployment}.py".format(
             platform_dir=g_platform_dir, system=system, deployment=deployment
@@ -390,18 +395,19 @@ def deploy(system, deployment, auth_config, env_config, nginx_config):
         context=g_context,
     )
 
-    sudo(
+    c.sudo(
         "chown -R {user}:{user} {root} {platform_dir}".format(
             user=g_user, root=g_context["EDXROOT"], platform_dir=g_platform_dir
         )
     )
 
     if deployment == "production":
-        sudo(
+        c.sudo(
             "rm /etc/nginx/sites-enabled/{system}.conf*".format(system=system),
-            warn_only=True,
+            warn=True,
         )
-        upload_template(
+        upload_template_fmt(
+            c,
             g_file("nginx", "sites-enabled", "{system}.conf".format(system=system)),
             "/etc/nginx/sites-enabled/{system}.conf".format(system=system),
             context=nginx_config,
@@ -415,9 +421,9 @@ def deploy(system, deployment, auth_config, env_config, nginx_config):
             ) as f:
                 s = f.read()
             sio.write(s.format(**g_context))
-            put(
+            c.put(
                 sio,
                 "/etc/supervisor/conf.d/{system}.conf".format(system=_system),
                 use_sudo=True,
             )
-        sudo("supervisorctl update")
+        c.sudo("supervisorctl update")

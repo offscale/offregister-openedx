@@ -6,9 +6,8 @@ from sys import modules
 import offregister_nginx.ubuntu as offregister_nginx
 import offregister_python.ubuntu as offregister_python
 import offregister_service.ubuntu as offregister_service
-from fabric.context_managers import cd, shell_env
-from fabric.contrib.files import append, exists, upload_template
-from fabric.operations import run, sudo
+from fabric.context_managers import shell_env
+from fabric.contrib.files import append, exists
 from offregister_fab_utils import Package
 from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils.misc import remote_newer_than
@@ -25,10 +24,11 @@ STATIC_ROOT = "{APP_PATH}/staticfiles".format(APP_PATH=APP_PATH)
 
 
 def sys_install0(*args, **kwargs):
-    if run('grep -Fq "LANG" /etc/environment', warn_only=True, quiet=True).succeeded:
+    if c.run('grep -Fq "LANG" /etc/environment', warn=True, hide=True).exited == 0:
         return False
 
     apt_depends(
+        c,
         "gettext",
         "libreadline6",
         "locales",
@@ -57,8 +57,8 @@ def sys_install0(*args, **kwargs):
         "lynx",
     )
 
-    sudo("""sed -i 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen""")
-    sudo("locale-gen")
+    c.sudo("""sed -i 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen""")
+    c.sudo("locale-gen")
     append(
         "/etc/environment",
         "LANG=en_US.UTF-8\n" "LANGUAGE=en_US:en\n" "LC_ALL=en_US.UTF-8\n",
@@ -67,15 +67,15 @@ def sys_install0(*args, **kwargs):
 
 
 def nodejs_install1(*args, **kwargs):
-    if exists("/usr/local/bin/node"):
+    if exists(c, runner=c.run, path="/usr/local/bin/node"):
         return False
 
-    run("curl -L https://git.io/n-install | bash -s -- -y lts")
-    sudo("for f in $HOME/n/bin/*; do ln -s $f /usr/local/bin/; done")
+    c.run("curl -L https://git.io/n-install | bash -s -- -y lts")
+    c.sudo("for f in $HOME/n/bin/*; do ln -s $f /usr/local/bin/; done")
 
 
 def edx_download_extract2(*args, **kwargs):
-    if exists("$HOME/Downloads/edx-platform"):
+    if exists(c, runner=c.run, path="$HOME/Downloads/edx-platform"):
         return False
 
     edx_config_path = "/edx/config"
@@ -86,42 +86,41 @@ def edx_download_extract2(*args, **kwargs):
 
     ensure_quote = partial(ensure_quoted, q='"')
 
-    user, group = user_group_tuple()
-    sudo(
+    user, group = user_group_tuple(c)
+    c.sudo(
         'mkdir -p "$HOME/Downloads" {paths} '
         "&& chown -R {user}:{group} {paths}".format(
             paths=" ".join(map(ensure_quote, paths)),
             user=user,
             group=group,
-        ),
-        shell_escape=False,
+        )
     )
-    run("touch '{APP_PATH}/log/edx.log'".format(APP_PATH=APP_PATH))
+    c.run("touch '{APP_PATH}/log/edx.log'".format(APP_PATH=APP_PATH))
 
-    with cd("$HOME/Downloads"):
+    with c.cd("$HOME/Downloads"):
         """
         openedx_docker_archive = "openedx-docker.tar.gz"
-        run(
+        c.run(
             "curl -L https://api.github.com/repos/openfun/openedx-docker/tarball -o {openedx_docker_archive}".format(
                 openedx_docker_archive=openedx_docker_archive
             )
         )
-        run(
+        c.run(
             "tar xf {openedx_docker_archive}".format(
                 openedx_docker_archive=openedx_docker_archive
             )
         )
-        run("mv openfun-openedx-docker* openfun-openedx-docker")
+        c.run("mv openfun-openedx-docker* openfun-openedx-docker")
         """
 
         edx_ball = "edxapp.tgz"
-        run(
+        c.run(
             "curl -sLo {edx_ball} "
             "https://github.com/edx/edx-platform/archive/{edx_release_ref}.tar.gz".format(
                 edx_ball=edx_ball, edx_release_ref=EDX_RELEASE_REF
             )
         )
-        run(
+        c.run(
             " && ".join(
                 (
                     "tar xzf {edx_ball}".format(edx_ball=edx_ball),
@@ -130,16 +129,20 @@ def edx_download_extract2(*args, **kwargs):
                         edx_app_path=ensure_quote(APP_PATH)
                     ),
                 )
-            ),
-            shell_escape=False,
+            )
         )
 
 
 def python_edx_platform_install3(*args, **kwargs):
-    if exists("{venv}/lib/python2.7/site-packages/twisted".format(venv=VENV)):
+    if exists(
+        c,
+        runner=c.run,
+        path="{venv}/lib/python2.7/site-packages/twisted".format(venv=VENV),
+    ):
         return False
 
     offregister_python.install_venv0(
+        c,
         python3=False,
         virtual_env=VENV,
         pip_version="9.0.3",
@@ -154,19 +157,21 @@ def python_edx_platform_install3(*args, **kwargs):
         ),
     )
 
-    user, group = user_group_tuple()
-    sudo("chown -R {user}:{group} {VENV}".format(user=user, group=group, VENV=VENV))
-    with cd(PLATFORM), shell_env(VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)):
-        run(
+    user, group = user_group_tuple(c)
+    c.sudo("chown -R {user}:{group} {VENV}".format(user=user, group=group, VENV=VENV))
+    with c.cd(PLATFORM), shell_env(VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)):
+        c.run(
             """sed -i 's/pip/# pip/g; s/setuptools/# setuptools/g' requirements/edx/pre.txt"""
         )
-        run("pip install -r requirements/edx/pre.txt")
-        run("pip install --src /usr/local/src_path -r requirements/edx/github.txt")
-        run("pip install -r requirements/edx/base.txt")
-        run("pip install -r requirements/edx/paver.txt")
-        run("pip install -r requirements/edx/post.txt")
-        run("pip install -r requirements/edx/local.txt")
-        run("pip install -r requirements/edx/development.txt")
+        c.run("python -m pip install -r requirements/edx/pre.txt")
+        c.run(
+            "python -m pip install --src /usr/local/src_path -r requirements/edx/github.txt"
+        )
+        c.run("python -m pip install -r requirements/edx/base.txt")
+        c.run("python -m pip install -r requirements/edx/paver.txt")
+        c.run("python -m pip install -r requirements/edx/post.txt")
+        c.run("python -m pip install -r requirements/edx/local.txt")
+        c.run("python -m pip install -r requirements/edx/development.txt")
 
 
 def nodejs_edx_platform_install4(*args, **kwargs):
@@ -177,29 +182,30 @@ def nodejs_edx_platform_install4(*args, **kwargs):
     ):
         return False
 
-    with cd(PLATFORM), shell_env(
+    with c.cd(PLATFORM), shell_env(
         PATH="$HOME/n/bin:{PLATFORM}/node_modules/.bin:$PATH".format(PLATFORM=PLATFORM)
     ):
-        if not exists("node_modules"):
-            run("npm i")
+        if not exists(c, runner=c.run, path="node_modules"):
+            c.run("npm i")
 
-        # with cd("node_modules/edx-ui-toolkit"):
-        # run("npm i -S node-sass==3.12.5")
-        # run("npm i")
+        # with c.cd("node_modules/edx-ui-toolkit"):
+        # c.run("npm i -S node-sass==3.12.5")
+        # c.run("npm i")
 
-        with shell_env(
+        env = dict(
             NO_PREREQ_INSTALL="1", VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)
-        ):
-            run(
-                " ".join(
-                    (
-                        "paver",
-                        "update_assets",
-                        # "--settings=fun.docker_build_production",
-                        "--skip-collect",
-                    )
+        )
+        c.run(
+            " ".join(
+                (
+                    "paver",
+                    "update_assets",
+                    # "--settings=fun.docker_build_production",
+                    "--skip-collect",
                 )
-            )
+            ),
+            env=env,
+        )
 
 
 def static_collector5(*args, **kwargs):
@@ -213,47 +219,47 @@ def static_collector5(*args, **kwargs):
     collect_static_args = "--noinput"
     edxapp_static_root = ensure_quoted(STATIC_ROOT)
 
-    with cd(PLATFORM), shell_env(VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)):
-        run(
+    with c.cd(PLATFORM), shell_env(VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)):
+        c.run(
             "python manage.py lms collectstatic --link {collect_static_args}".format(
                 collect_static_args=collect_static_args
             )
         )
-        run(
+        c.run(
             "python manage.py cms collectstatic --link {collect_static_args}".format(
                 collect_static_args=collect_static_args
             )
         )
 
         # Replace duplicated file by a symlink
-        run(
+        c.run(
             "rdfind -makesymlinks true -followsymlinks true {edxapp_static_root}".format(
                 edxapp_static_root=edxapp_static_root
             ),
-            quiet=True,
+            hide=True,
         )
 
-        run(
+        c.run(
             "python manage.py lms collectstatic {collect_static_args}".format(
                 collect_static_args=collect_static_args
             )
         )
-        run(
+        c.run(
             "python manage.py cms collectstatic {collect_static_args}".format(
                 collect_static_args=collect_static_args
             )
         )
 
-        run(
+        c.run(
             "rdfind -makesymlinks true {edxapp_static_root}".format(
                 edxapp_static_root=edxapp_static_root
             ),
-            quiet=True,
+            hide=True,
         )
 
 
-def python_server6(lms_port=9053, cms_port=9054, *args, **kwargs):
-    user, group = user_group_tuple()
+def python_server6(c, lms_port=9053, cms_port=9054, *args, **kwargs):
+    user, group = user_group_tuple(c)
     host = kwargs.get("gunicorn_host", "localhost")
 
     def _service(name, port):
@@ -307,7 +313,8 @@ def nginx_server6(lms_port=9053, cms_port=9054, *args, **kwargs):
         "openedx-docker",
     )
 
-    upload_template(
+    upload_template_fmt(
+        c,
         configs_dir("cms.conf"),
         "/etc/nginx/sites-enabled/{server_name}.conf".format(
             server_name=kwargs["CMS_SERVER_NAME"]
@@ -323,7 +330,8 @@ def nginx_server6(lms_port=9053, cms_port=9054, *args, **kwargs):
         backup=False,
     )
 
-    upload_template(
+    upload_template_fmt(
+        c,
         configs_dir("lms.conf"),
         "/etc/nginx/sites-enabled/{server_name}.conf".format(
             server_name=kwargs["LMS_SERVER_NAME"]
@@ -338,4 +346,4 @@ def nginx_server6(lms_port=9053, cms_port=9054, *args, **kwargs):
         use_sudo=True,
         backup=False,
     )
-    return sudo("systemctl start nginx", warn_only=True)
+    return c.sudo("systemctl start nginx", warn=True)
