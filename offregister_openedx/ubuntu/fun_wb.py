@@ -3,9 +3,9 @@ from functools import partial
 
 import offregister_python.ubuntu as offregister_python
 from fabric.context_managers import shell_env
-from fabric.contrib.files import append, exists
 from offregister_fab_utils.apt import apt_depends
 from offutils import ensure_quoted
+from patchwork.files import append, exists
 
 VENV = "/edx/app/edxapp/venv"
 
@@ -43,9 +43,10 @@ def sys_install0(*args, **kwargs):
     c.sudo("""sed -i 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen""")
     c.sudo("locale-gen")
     append(
+        c,
+        c.sudo,
         "/etc/environment",
         "LANG=en_US.UTF-8\n" "LANGUAGE=en_US:en\n" "LC_ALL=en_US.UTF-8\n",
-        use_sudo=True,
     )
 
 

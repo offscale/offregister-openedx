@@ -7,12 +7,12 @@ import offregister_nginx.ubuntu as offregister_nginx
 import offregister_python.ubuntu as offregister_python
 import offregister_service.ubuntu as offregister_service
 from fabric.context_managers import shell_env
-from fabric.contrib.files import append, exists
 from offregister_fab_utils import Package
 from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils.misc import remote_newer_than
 from offregister_fab_utils.ubuntu.misc import user_group_tuple
 from offutils import ensure_quoted
+from patchwork.files import append, exists
 from pkg_resources import resource_filename
 
 EDX_RELEASE_REF = "open-release/eucalyptus.3"
@@ -60,9 +60,10 @@ def sys_install0(*args, **kwargs):
     c.sudo("""sed -i 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen""")
     c.sudo("locale-gen")
     append(
+        c,
+        c.sudo,
         "/etc/environment",
         "LANG=en_US.UTF-8\n" "LANGUAGE=en_US:en\n" "LC_ALL=en_US.UTF-8\n",
-        use_sudo=True,
     )
 
 

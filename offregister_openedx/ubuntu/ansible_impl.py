@@ -16,7 +16,7 @@ from json import dumps, load
 from os import path
 
 from fabric.context_managers import prefix, shell_env
-from fabric.contrib.files import append, exists, sed
+from patchwork.files import append, exists, sed
 from fabric.operations import sudo
 from fabric.state import env
 from offregister_fab_utils.apt import apt_depends
@@ -78,11 +78,12 @@ def ansible_bootstrap0(*args, **kwargs):
     )
     c.sudo("add-apt-repository -y ppa:git-core/ppa")
 
-    dist = c.run("lsb_release -cs")
+    dist = c.run("lsb_release -cs").stdout.rstrip()
     append(
+        c,
+        c.sudo,
         "/etc/apt/sources.list.d/openedx.list",
         "deb http://ppa.edx.org {dist} main".format(dist=dist),
-        use_sudo=True,
     )
     c.sudo("apt-get update -q")
     apt_depends(

@@ -11,13 +11,13 @@ else:
 from os import path
 
 from fabric.context_managers import settings, shell_env
-from fabric.contrib.files import append, exists
 from fabric.operations import sudo
 from offregister_fab_utils.apt import apt_depends
 from offregister_fab_utils.fs import cmd_avail
 from offregister_fab_utils.git import clone_or_update
 from offregister_fab_utils.ubuntu.systemd import restart_systemd
 from offutils import update_d
+from patchwork.files import append, exists
 from pkg_resources import resource_filename
 
 # Global variables
@@ -74,9 +74,10 @@ def install0(*args, **kwargs):
 
         # Elasticsearch (optional)
         append(
+            c,
+            c.sudo,
             "/etc/apt/sources.list.d/elasticsearch.list",
             "deb http://packages.elasticsearch.org/elasticsearch/0.90/debian stable main",
-            use_sudo=True,
         )
         c.sudo("apt update")
         c.sudo("apt-get install -y elasticsearch=0.90.13")
@@ -258,7 +259,7 @@ def configure1(
     for system in ("CMS", "LMS"):
         k = kwargs["{system}_SITE_NAME".format(system=system)]
         if k not in ("127.0.0.1", "localhost"):
-            append("/etc/hosts", "127.0.0.1\t{k}".format(k=k), use_sudo=True)
+            append(c, c.sudo, "/etc/hosts", "127.0.0.1\t{k}".format(k=k))
 
     get_nginx_conf = lambda system: update_d(
         dict(
