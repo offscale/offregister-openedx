@@ -16,7 +16,6 @@ from json import dumps, load
 from os import path
 
 from fabric.context_managers import prefix, shell_env
-from patchwork.files import append, exists, sed
 from fabric.operations import sudo
 from fabric.state import env
 from offregister_fab_utils.apt import apt_depends
@@ -27,6 +26,7 @@ from offregister_fab_utils.ubuntu.systemd import (
     restart_systemd,
 )
 from offutils import gen_random_str, it_consumes, pp
+from patchwork.files import append, exists, sed
 from pkg_resources import resource_filename
 
 from offregister_openedx.utils import OTemplate, is_email
@@ -34,9 +34,10 @@ from offregister_openedx.utils import OTemplate, is_email
 g_openedx_release = "open-release/ironwood.2"
 
 
-def ansible_bootstrap0(*args, **kwargs):
+def ansible_bootstrap0(c, *args, **kwargs):
     """Reimplemented in Fabric:
-    https://github.com/edx/configuration/blob/c47d85a/util/install/ansible-bootstrap.sh"""
+    https://github.com/edx/configuration/blob/c47d85a/util/install/ansible-bootstrap.sh
+    """
 
     c.sudo("add-apt-repository -y universe")
     c.sudo("add-apt-repository -y main")
@@ -139,7 +140,7 @@ def ansible_bootstrap0(*args, **kwargs):
     return "openedx::step0", configuration_dir
 
 
-def sandbox1(*args, **kwargs):
+def sandbox1(c, *args, **kwargs):
     """Reimplemented in Fabric:
     https://github.com/edx/configuration/blob/d87bf6a/util/install/native.sh"""
 
@@ -237,7 +238,7 @@ def update_lms_cms_env2(**kwargs):
     return "openedx::step3"
 
 
-def update_conf3(*args, **kwargs):
+def update_conf3(c, *args, **kwargs):
     lms_path, lms_config = get_env("lms.env.json")
     cms_path, cms_config = get_env("cms.env.json")
     if "ALL_EMAILS_TO" in kwargs:
@@ -366,7 +367,7 @@ def update_conf3(*args, **kwargs):
     return "openedx::step3"
 
 
-def nginx_domain_and_https_setup4(*args, **kwargs):
+def nginx_domain_and_https_setup4(c, *args, **kwargs):
     pp(kwargs)
     g = partial(
         get_load_remote_file,
@@ -417,7 +418,7 @@ def nginx_domain_and_https_setup4(*args, **kwargs):
     return restart_systemd("nginx")
 
 
-def edx_platform_fork5(*args, **kwargs):
+def edx_platform_fork5(c, *args, **kwargs):
     # TODO: Finish
     run_paver = True
 
@@ -449,7 +450,7 @@ def edx_platform_fork5(*args, **kwargs):
     return "openedx::step5"
 
 
-def _install_stanford_theme3(*args, **kwargs):
+def _install_stanford_theme3(c, *args, **kwargs):
     theme_dir = "/edx/app/edxapp/edx-platform/themes/edx-stanford-theme"
     clone_or_update(
         team="Stanford-Online",
@@ -478,7 +479,7 @@ def _install_stanford_theme3(*args, **kwargs):
     return 'installed "{!s}" theme'.format(lms_config["THEME_NAME"])
 
 
-def _uninstall_stanford_theme4(*args, **kwargs):
+def _uninstall_stanford_theme4(c, *args, **kwargs):
     theme_dir = "/edx/app/edxapp/edx-platform/themes/edx-stanford-theme"
     if exists(c, runner=c.run, path=theme_dir):
         c.sudo("rm -rf '{}'".format(theme_dir))
@@ -501,7 +502,7 @@ def _uninstall_stanford_theme4(*args, **kwargs):
     return 'installed "{!s}" theme'.format(lms_config["THEME_NAME"])
 
 
-def install_analytics_dashboard6(*args, **kwargs):
+def install_analytics_dashboard6(c, *args, **kwargs):
     apt_depends(c, "python-virtualenv")
 
     edxapp = partial(sudo, user="edxapp", warn=True)
@@ -623,7 +624,7 @@ get_env = lambda filename: get_load_remote_file(
 )
 
 
-def _step3(*args, **kwargs):
+def _step3(c, *args, **kwargs):
     clone_or_update(
         team="edx", repo="configuration", branch=g_openedx_release, skip_reset=True
     )
@@ -638,7 +639,7 @@ def _step3(*args, **kwargs):
     return "openedx::step1"
 
 
-def _step4(*args, **kwargs):
+def _step4(c, *args, **kwargs):
     upload_template_fmt(
         c,
         resource_filename("offregister_openedx", path.join("conf", "server-vars.yml")),
@@ -651,7 +652,7 @@ def _step4(*args, **kwargs):
     )
 
 
-def _install_theme5(*args, **kwargs):
+def _install_theme5(c, *args, **kwargs):
     clone_or_update(
         team="dadasoz",
         repo="edx-bootstrap-theme",
@@ -671,7 +672,7 @@ def _install_theme5(*args, **kwargs):
     return "openedx::step3"
 
 
-def _set_theme6(*args, **kwargs):
+def _set_theme6(c, *args, **kwargs):
     virtual_env = "/edx/app/edxapp/venvs/edxapp"
     with c.cd("/edx/app/edxapp/edx-platform"), shell_env(
         VIRTUAL_ENV=virtual_env, PATH="{}/bin:$PATH".format(virtual_env)

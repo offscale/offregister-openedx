@@ -11,7 +11,7 @@ EDX_RELEASE_REF = environ.get("EDX_RELEASE_REF", "open-release/juniper.3")
 CONFIGURATION_DIR = "/tmp/edx/configuration"
 
 
-def system_install0(*args, **kwargs):
+def system_install0(c, *args, **kwargs):
     apt_depends(
         c,
         "curl",
@@ -24,7 +24,7 @@ def system_install0(*args, **kwargs):
     c.sudo("python -m pip install -U pyopenssl")
 
 
-def config_yml1(*args, **kwargs):
+def config_yml1(c, *args, **kwargs):
     # if exists(c, runner=c.run, path="config.yml"): return False
 
     c.run(
@@ -36,7 +36,7 @@ def config_yml1(*args, **kwargs):
     )
 
 
-def configuration_prepare1(*args, **kwargs):
+def configuration_prepare1(c, *args, **kwargs):
     git_dir = "{CONFIGURATION_DIR}/.git".format(CONFIGURATION_DIR=CONFIGURATION_DIR)
     c.run("mkdir -p {CONFIGURATION_DIR}".format(CONFIGURATION_DIR=CONFIGURATION_DIR))
     if exists(c, runner=c.run, path=git_dir):
@@ -65,7 +65,7 @@ def configuration_prepare1(*args, **kwargs):
         )
 
 
-def bootstrap2(*args, **kwargs):
+def bootstrap2(c, *args, **kwargs):
     env = dict(OPENEDX_RELEASE=EDX_RELEASE_REF)
     c.sudo(
         "bash {CONFIGURATION_DIR}/util/install/ansible-bootstrap.sh".format(
@@ -81,7 +81,7 @@ def bootstrap2(*args, **kwargs):
     )
 
 
-def ansible_native3(*args, **kwargs):
+def ansible_native3(c, *args, **kwargs):
     system_version = c.run("lsb_release -rs", hide=True)
 
     native_sh = ensure_quoted(

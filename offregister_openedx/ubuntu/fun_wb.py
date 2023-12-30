@@ -10,7 +10,7 @@ from patchwork.files import append, exists
 VENV = "/edx/app/edxapp/venv"
 
 
-def sys_install0(*args, **kwargs):
+def sys_install0(c, *args, **kwargs):
     if c.run('grep -Fq "LANG" /etc/environment', warn=True, hide=True).exited == 0:
         return False
 
@@ -50,7 +50,7 @@ def sys_install0(*args, **kwargs):
     )
 
 
-def nodejs_install1(*args, **kwargs):
+def nodejs_install1(c, *args, **kwargs):
     if exists(c, runner=c.run, path="/usr/local/bin/node"):
         return False
 
@@ -58,7 +58,7 @@ def nodejs_install1(*args, **kwargs):
     c.sudo("for f in $HOME/n/bin/*; do ln -s $f /usr/local/bin/; done")
 
 
-def edx_download_extract2(*args, **kwargs):
+def edx_download_extract2(c, *args, **kwargs):
     if exists(
         c,
         runner=c.run,
@@ -118,7 +118,7 @@ def edx_download_extract2(*args, **kwargs):
         )
 
 
-def python_edx_platform_install3(*args, **kwargs):
+def python_edx_platform_install3(c, *args, **kwargs):
     offregister_python.install_venv0(
         python3=False, virtual_env=VENV, pip_version="9.0.3"
     )
@@ -134,7 +134,7 @@ def python_edx_platform_install3(*args, **kwargs):
         # c.run("python -m pip install -r requirements/edx/fun.txt")
 
 
-def nodejs_edx_platform_install3(*args, **kwargs):
+def nodejs_edx_platform_install3(c, *args, **kwargs):
     path_env = c.run("echo $PATH", hide=True).stdout.rstrip()
     with c.cd("/edx/app/edxapp/edx-platform"), shell_env(
         PATH="{path_env}:/edx/app/edxapp/edx-platform/node_modules/.bin".format(
@@ -159,7 +159,7 @@ def nodejs_edx_platform_install3(*args, **kwargs):
         )
 
 
-def static_collector(*args, **kwargs):
+def static_collector(c, *args, **kwargs):
     collect_static_args = "--noinput - -settings = fun.docker_build_production"
     with c.cd("/edx/app/edxapp/edx-platform"), shell_env(
         VIRTUAL_ENV=VENV, PATH="{}/bin:$PATH".format(VENV)

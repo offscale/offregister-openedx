@@ -23,7 +23,7 @@ PLATFORM = "{APP_PATH}/edx-platform".format(APP_PATH=APP_PATH)
 STATIC_ROOT = "{APP_PATH}/staticfiles".format(APP_PATH=APP_PATH)
 
 
-def sys_install0(*args, **kwargs):
+def sys_install0(c, *args, **kwargs):
     if c.run('grep -Fq "LANG" /etc/environment', warn=True, hide=True).exited == 0:
         return False
 
@@ -67,7 +67,7 @@ def sys_install0(*args, **kwargs):
     )
 
 
-def nodejs_install1(*args, **kwargs):
+def nodejs_install1(c, *args, **kwargs):
     if exists(c, runner=c.run, path="/usr/local/bin/node"):
         return False
 
@@ -75,7 +75,7 @@ def nodejs_install1(*args, **kwargs):
     c.sudo("for f in $HOME/n/bin/*; do ln -s $f /usr/local/bin/; done")
 
 
-def edx_download_extract2(*args, **kwargs):
+def edx_download_extract2(c, *args, **kwargs):
     if exists(c, runner=c.run, path="$HOME/Downloads/edx-platform"):
         return False
 
@@ -134,7 +134,7 @@ def edx_download_extract2(*args, **kwargs):
         )
 
 
-def python_edx_platform_install3(*args, **kwargs):
+def python_edx_platform_install3(c, *args, **kwargs):
     if exists(
         c,
         runner=c.run,
@@ -175,7 +175,7 @@ def python_edx_platform_install3(*args, **kwargs):
         c.run("python -m pip install -r requirements/edx/development.txt")
 
 
-def nodejs_edx_platform_install4(*args, **kwargs):
+def nodejs_edx_platform_install4(c, *args, **kwargs):
     if remote_newer_than(
         "{platform}/lms/static/css/lms-footer.css".format(platform=PLATFORM),
         # 2020-09-26; `touch` the file to make this process rerun
@@ -209,7 +209,7 @@ def nodejs_edx_platform_install4(*args, **kwargs):
         )
 
 
-def static_collector5(*args, **kwargs):
+def static_collector5(c, *args, **kwargs):
     if remote_newer_than(
         "{platform}/cms/static/css/edx-icons.css".format(platform=PLATFORM),
         # 2020-09-26; `touch` the file to make this process rerun

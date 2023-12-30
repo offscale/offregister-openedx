@@ -33,7 +33,7 @@ g_file = lambda *paths: resource_filename(
 )
 
 
-def install0(*args, **kwargs):
+def install0(c, *args, **kwargs):
     openedx_release = kwargs.get("OPENEDX_RELEASE", g_openedx_release)
 
     # Services
@@ -321,7 +321,7 @@ def configure1(
     return fin()
 
 
-def restart_services3(*args, **kwargs):
+def restart_services3(c, *args, **kwargs):
     if kwargs.get("reboot_storage_services"):
         for service in (
             "memcached",
