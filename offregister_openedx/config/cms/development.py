@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from .devstack import *
 
 MEDIA_ROOT = "%(EDXROOT)s/uploads/"  # TODO is this useful?

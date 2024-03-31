@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from re import compile
 from string import Template
 

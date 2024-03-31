@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from .aws import *
 
 MEDIA_ROOT = "%(EDXROOT)s/uploads/"  # TODO: is this useful?

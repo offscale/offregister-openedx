@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from functools import partial
 from json import dump, load
 from sys import modules, version

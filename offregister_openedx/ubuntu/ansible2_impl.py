@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Based off Sep 11, 2020 (v36) version of
 # https://openedx.atlassian.net/wiki/spaces/OpenOPS/pages/146440579/Native+Open+edX+platform+Ubuntu+16.04+64+bit+Installation
 

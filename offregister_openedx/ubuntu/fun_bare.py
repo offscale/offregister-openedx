@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Derived from https://github.com/openfun/openedx-docker/blob/a395143/releases/eucalyptus/3/bare/Dockerfile
 from functools import partial
 from os import path
